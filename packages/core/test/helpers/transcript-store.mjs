@@ -37,7 +37,45 @@ export async function createIsolatedStore(t) {
 export function openSqlite(sqlitePath) {
   const db = new DatabaseSync(sqlitePath);
   db.exec("PRAGMA foreign_keys = ON");
-  return db;
+  return withPlainObjectRows(db);
+}
+
+function withPlainObjectRows(db) {
+  return new Proxy(db, {
+    get(target, property, receiver) {
+      if (property !== "prepare") {
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+
+      return (sql) => withPlainObjectStatement(target.prepare(sql));
+    },
+  });
+}
+
+function withPlainObjectStatement(statement) {
+  return new Proxy(statement, {
+    get(target, property, receiver) {
+      if (property === "all") {
+        return (...params) => target.all(...params).map(toPlainObjectRow);
+      }
+
+      if (property === "get") {
+        return (...params) => toPlainObjectRow(target.get(...params));
+      }
+
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+function toPlainObjectRow(row) {
+  if (!row || Array.isArray(row)) {
+    return row;
+  }
+
+  return { ...row };
 }
 
 export function getRawBlobRow(sqlitePath, rawPointerId) {

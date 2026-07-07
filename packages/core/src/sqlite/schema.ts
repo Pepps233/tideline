@@ -96,5 +96,57 @@ export function createSchema(db: BetterSqlite3.Database): void {
 
     CREATE INDEX IF NOT EXISTS source_labels_item_order_idx
       ON source_labels(source_item_id, label_index);
+
+    CREATE TABLE IF NOT EXISTS context_blocks (
+      context_block_id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL CHECK (length(trim(thread_id)) > 0),
+      block_index INTEGER NOT NULL CHECK (block_index > 0),
+      source_item_signature TEXT NOT NULL
+        CHECK (length(source_item_signature) > 0),
+      summary TEXT NOT NULL CHECK (length(trim(summary)) > 0),
+      created_at TEXT NOT NULL,
+      UNIQUE (thread_id, block_index),
+      UNIQUE (thread_id, source_item_signature)
+    );
+
+    CREATE INDEX IF NOT EXISTS context_blocks_thread_order_idx
+      ON context_blocks(thread_id, block_index);
+
+    CREATE TABLE IF NOT EXISTS context_block_labels (
+      context_block_id TEXT NOT NULL,
+      label TEXT NOT NULL CHECK (length(label) > 0),
+      label_index INTEGER NOT NULL CHECK (label_index >= 0),
+      PRIMARY KEY (context_block_id, label),
+      UNIQUE (context_block_id, label_index),
+      FOREIGN KEY (context_block_id)
+        REFERENCES context_blocks(context_block_id)
+        ON UPDATE RESTRICT
+        ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS context_block_labels_block_order_idx
+      ON context_block_labels(context_block_id, label_index);
+
+    CREATE TABLE IF NOT EXISTS context_block_source_items (
+      context_block_id TEXT NOT NULL,
+      source_item_id TEXT NOT NULL,
+      source_item_index INTEGER NOT NULL CHECK (source_item_index >= 0),
+      PRIMARY KEY (context_block_id, source_item_id),
+      UNIQUE (context_block_id, source_item_index),
+      FOREIGN KEY (context_block_id)
+        REFERENCES context_blocks(context_block_id)
+        ON UPDATE RESTRICT
+        ON DELETE RESTRICT,
+      FOREIGN KEY (source_item_id)
+        REFERENCES source_items(source_item_id)
+        ON UPDATE RESTRICT
+        ON DELETE RESTRICT
+    );
+
+    CREATE INDEX IF NOT EXISTS context_block_source_items_block_order_idx
+      ON context_block_source_items(context_block_id, source_item_index);
+
+    CREATE INDEX IF NOT EXISTS context_block_source_items_source_item_idx
+      ON context_block_source_items(source_item_id);
   `);
 }

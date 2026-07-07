@@ -4,6 +4,7 @@ import {
   parseJsonStringArray,
 } from "../validation.js";
 import type {
+  StoredContextBlock,
   RawBlobPointer,
   SourceLabel,
   StoredSourceItem,
@@ -46,6 +47,24 @@ export interface SourceItemRow {
 export interface SourceLabelRow {
   source_item_id: string;
   label: string;
+}
+
+export interface ContextBlockRow {
+  context_block_id: string;
+  thread_id: string;
+  block_index: number;
+  summary: string;
+  created_at: string;
+}
+
+export interface ContextBlockLabelRow {
+  context_block_id: string;
+  label: string;
+}
+
+export interface ContextBlockSourceItemRow {
+  context_block_id: string;
+  source_item_id: string;
 }
 
 export interface SqliteNextTurnIndexRow {
@@ -102,6 +121,22 @@ export function mapSourceItemRow(
     contextAction: normalizeContextAction(row.context_action),
     actionReason: row.action_reason,
     labels: labelsByItemId.get(row.source_item_id) ?? [],
+    createdAt: row.created_at,
+  };
+}
+
+export function mapContextBlockRow(
+  row: ContextBlockRow,
+  sourceItemIdsByBlockId: Map<string, string[]>,
+  labelsByBlockId: Map<string, SourceLabel[]>,
+): StoredContextBlock {
+  return {
+    contextBlockId: row.context_block_id,
+    threadId: row.thread_id,
+    blockIndex: row.block_index,
+    summary: row.summary,
+    sourceItemIds: sourceItemIdsByBlockId.get(row.context_block_id) ?? [],
+    labels: labelsByBlockId.get(row.context_block_id) ?? [],
     createdAt: row.created_at,
   };
 }
