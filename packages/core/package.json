@@ -20,5 +20,12 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm run build && node --test \"test/**/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.20.0"
   }
 }
