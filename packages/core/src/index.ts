@@ -537,9 +537,7 @@ class SqliteTranscriptStore implements TranscriptStore {
     return rows.map((row) => mapSourceItemRow(row, labelsByItemId));
   }
 
-  private getSourceLabels(
-    sourceItemIds: string[],
-  ): Map<string, SourceLabel[]> {
+  private getSourceLabels(sourceItemIds: string[]): Map<string, SourceLabel[]> {
     const labelsByItemId = new Map<string, SourceLabel[]>();
 
     for (const sourceItemId of sourceItemIds) {
@@ -1468,8 +1466,7 @@ const LOW_SIGNAL_USER_TEXT_PATTERN =
   /^(?:thanks?|thank you|thanks in advance|appreciate it)\b/i;
 const RULE_PATTERN =
   /(?:^|\n)\s*(?:rules?|constraints?|guidelines?):|(?:^|\n)\s*-?\s*(?:never|always|must|do not|don't|keep)\b/i;
-const ACCEPTANCE_CRITERIA_PATTERN =
-  /(?:^|\n)\s*acceptance criteria?:/i;
+const ACCEPTANCE_CRITERIA_PATTERN = /(?:^|\n)\s*acceptance criteria?:/i;
 const DESIGN_DECISION_PATTERN = /(?:^|\n)\s*(?:decision|decided):/i;
 const OPEN_QUESTION_PATTERN = /^(?:questions?:\s*)?.+\?$/i;
 const COMMAND_PATTERN =

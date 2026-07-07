@@ -715,7 +715,8 @@ test("appends non-text turns with one compact synthetic source item", async (t) 
 });
 
 test("persists source item schema, label joins, thread ordering, and reopen behavior", async (t) => {
-  const { blobDir, closeStore, sqlitePath, store } = await createIsolatedStore(t);
+  const { blobDir, closeStore, sqlitePath, store } =
+    await createIsolatedStore(t);
   const first = await store.appendTurn({
     threadId: "thread-reopen-source-items",
     turnRole: "user",
