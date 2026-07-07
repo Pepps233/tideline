@@ -1,12 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type BetterSqlite3 from "better-sqlite3";
@@ -420,29 +414,17 @@ class SqliteTranscriptStore implements TranscriptStore {
   ): void {
     const blobPath = this.resolveBlobPath(storagePath);
 
-    if (existsSync(blobPath)) {
-      const existing = readBlobFile(blobPath, storagePath);
-      if (
-        existing.byteLength !== expectedByteLength ||
-        hashBytes(existing) !== expectedSha
-      ) {
-        throw new Error(`Raw blob SHA mismatch at ${storagePath}`);
-      }
-
-      return;
-    }
-
     try {
       writeFileSync(blobPath, raw, { flag: "wx", mode: 0o600 });
     } catch (error) {
       if (isNodeError(error) && error.code === "EEXIST") {
-        const existing = readBlobFile(blobPath, storagePath);
-        if (
-          existing.byteLength === expectedByteLength &&
-          hashBytes(existing) === expectedSha
-        ) {
-          return;
-        }
+        verifyExistingBlob(
+          blobPath,
+          storagePath,
+          expectedSha,
+          expectedByteLength,
+        );
+        return;
       }
 
       throw error;
@@ -626,6 +608,21 @@ function readBlobFile(blobPath: string, rawPointerId: string): Buffer {
     throw new Error(
       `Raw blob unreadable for raw pointer ${rawPointerId}: ${messageFromError(error)}`,
     );
+  }
+}
+
+function verifyExistingBlob(
+  blobPath: string,
+  storagePath: string,
+  expectedSha: string,
+  expectedByteLength: number,
+): void {
+  const existing = readBlobFile(blobPath, storagePath);
+  if (
+    existing.byteLength !== expectedByteLength ||
+    hashBytes(existing) !== expectedSha
+  ) {
+    throw new Error(`Raw blob SHA mismatch at ${storagePath}`);
   }
 }
 
