@@ -251,7 +251,7 @@ class SqliteTranscriptStore implements TranscriptStore {
         storage_kind TEXT NOT NULL CHECK (storage_kind = 'file'),
         storage_path TEXT NOT NULL CHECK (length(storage_path) > 0),
         created_at TEXT NOT NULL,
-        UNIQUE (sha256, byte_length)
+        UNIQUE (sha256, byte_length, media_type)
       );
 
       CREATE TABLE IF NOT EXISTS transcript_turns (
@@ -291,7 +291,7 @@ class SqliteTranscriptStore implements TranscriptStore {
     const sha256 = hashBytes(raw);
     const byteLength = raw.byteLength;
     const existing = this.db
-      .prepare<[string, number], RawBlobRow>(
+      .prepare<[string, number, string], RawBlobRow>(
         `SELECT
           raw_pointer_id,
           sha256,
@@ -300,9 +300,9 @@ class SqliteTranscriptStore implements TranscriptStore {
           storage_kind,
           storage_path
         FROM raw_blobs
-        WHERE sha256 = ? AND byte_length = ?`,
+        WHERE sha256 = ? AND byte_length = ? AND media_type = ?`,
       )
-      .get(sha256, byteLength);
+      .get(sha256, byteLength, mediaType);
 
     if (existing) {
       const pointer = mapRawBlobRow(existing);

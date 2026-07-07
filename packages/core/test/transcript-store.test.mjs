@@ -112,6 +112,33 @@ test("writes SHA-addressed raw blobs and reuses duplicate content", async (t) =>
   assert.equal(sha256(blobBytes), expectedSha);
 });
 
+test("keeps separate raw pointers for different media types", async (t) => {
+  const { sqlitePath, store } = await createIsolatedStore(t);
+  const raw = "same bytes with different meanings";
+
+  const textTurn = await store.appendTurn({
+    threadId: "thread-a",
+    turnRole: "user",
+    raw,
+    mediaType: "text/plain; charset=utf-8",
+  });
+  const binaryTurn = await store.appendTurn({
+    threadId: "thread-a",
+    turnRole: "model",
+    raw,
+    mediaType: "application/octet-stream",
+  });
+
+  assert.notEqual(binaryTurn.rawPointerId, textTurn.rawPointerId);
+
+  const textBlob = getRawBlobRow(sqlitePath, textTurn.rawPointerId);
+  const binaryBlob = getRawBlobRow(sqlitePath, binaryTurn.rawPointerId);
+
+  assert.equal(textBlob.media_type, "text/plain; charset=utf-8");
+  assert.equal(binaryBlob.media_type, "application/octet-stream");
+  assert.equal(binaryBlob.storage_path, textBlob.storage_path);
+});
+
 test("reads text and binary raw content through stored turns", async (t) => {
   const { store } = await createIsolatedStore(t);
   const textTurn = await store.appendTurn({
