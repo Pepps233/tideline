@@ -1,12 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  chmod,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -106,7 +100,9 @@ test("writes SHA-addressed raw blobs and reuses duplicate content", async (t) =>
   const db = openSqlite(sqlitePath);
 
   try {
-    const { count } = db.prepare("SELECT COUNT(*) AS count FROM raw_blobs").get();
+    const { count } = db
+      .prepare("SELECT COUNT(*) AS count FROM raw_blobs")
+      .get();
     assert.equal(count, 1);
   } finally {
     db.close();
@@ -226,7 +222,10 @@ test("appends and lists ordered turns independently per thread", async (t) => {
   assert.equal(third.turnIndex, 3);
   assert.deepEqual(first.sourceItemIds, []);
   assert.deepEqual(first.derivedContextBlockIds, []);
-  assert.equal(new Date(first.createdAt).toISOString(), firstCreatedAt.toISOString());
+  assert.equal(
+    new Date(first.createdAt).toISOString(),
+    firstCreatedAt.toISOString(),
+  );
 
   const threadA = await store.listThreadTurns("thread-a");
   const threadB = await store.listThreadTurns("thread-b");
@@ -260,7 +259,9 @@ test("configures SQLite WAL mode and raw pointer foreign keys", async (t) => {
   const db = openSqlite(sqlitePath);
 
   try {
-    const { journal_mode: journalMode } = db.prepare("PRAGMA journal_mode").get();
+    const { journal_mode: journalMode } = db
+      .prepare("PRAGMA journal_mode")
+      .get();
     const rawPointerKeys = db
       .prepare("PRAGMA foreign_key_list(transcript_turns)")
       .all()
@@ -344,7 +345,9 @@ test("stores only raw pointers on transcript turns", async (t) => {
     const columnNames = columns.map((column) => column.name);
 
     assert.deepEqual(
-      columnNames.filter((name) => /raw|body|content|payload|bytes|text/i.test(name)),
+      columnNames.filter((name) =>
+        /(?:^|_)(?:raw|body|content|payload|bytes|text)(?:_|$)/i.test(name),
+      ),
       ["raw_pointer_id"],
     );
 
