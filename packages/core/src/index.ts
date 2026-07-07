@@ -13,6 +13,29 @@ import type BetterSqlite3 from "better-sqlite3";
 
 export type TranscriptRole = "user" | "model";
 
+export type ContextAction = "preserve_exact" | "compact" | "discard";
+
+export type SourceLabel =
+  | "acceptance_criterion"
+  | "api_name"
+  | "code_reference"
+  | "command"
+  | "design_decision"
+  | "error_message"
+  | "exact_value"
+  | "external_fact"
+  | "file_output"
+  | "file_path"
+  | "open_question"
+  | "project_convention"
+  | "reasoning"
+  | "rule"
+  | "task_state"
+  | "test_result"
+  | "tool_output"
+  | "user_instruction"
+  | "exploration";
+
 export interface StoredTranscriptTurn {
   turnId: string;
   threadId: string;
@@ -33,6 +56,20 @@ export interface RawBlobPointer {
   storagePath: string;
 }
 
+export interface StoredSourceItem {
+  sourceItemId: string;
+  turnId: string;
+  itemIndex: number;
+  rawPointerId: string;
+  rawStartByteOffset: number | null;
+  rawEndByteOffset: number | null;
+  renderedExcerpt: string;
+  contextAction: ContextAction;
+  actionReason: string;
+  labels: SourceLabel[];
+  createdAt: string;
+}
+
 export interface AppendTranscriptTurnInput {
   threadId: string;
   turnRole: TranscriptRole;
@@ -44,6 +81,9 @@ export interface AppendTranscriptTurnInput {
 export interface TranscriptStore {
   appendTurn(input: AppendTranscriptTurnInput): Promise<StoredTranscriptTurn>;
   getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined>;
+  getSourceItem(sourceItemId: string): Promise<StoredSourceItem | undefined>;
+  listTurnSourceItems(turnId: string): Promise<StoredSourceItem[]>;
+  listThreadSourceItems(threadId: string): Promise<StoredSourceItem[]>;
   listThreadTurns(threadId: string): Promise<StoredTranscriptTurn[]>;
   readTurnRaw(turnId: string): Promise<Uint8Array>;
   close(): Promise<void>;
@@ -73,6 +113,24 @@ interface TranscriptTurnRow {
   source_item_ids: string;
   derived_context_block_ids: string;
   created_at: string;
+}
+
+interface SourceItemRow {
+  source_item_id: string;
+  turn_id: string;
+  item_index: number;
+  raw_pointer_id: string;
+  raw_start_byte_offset: number | null;
+  raw_end_byte_offset: number | null;
+  rendered_excerpt: string;
+  context_action: string;
+  action_reason: string;
+  created_at: string;
+}
+
+interface SourceLabelRow {
+  source_item_id: string;
+  label: string;
 }
 
 interface SqliteNextTurnIndexRow {
@@ -186,6 +244,89 @@ class SqliteTranscriptStore implements TranscriptStore {
     return row ? mapTranscriptTurnRow(row) : undefined;
   }
 
+  async getSourceItem(
+    sourceItemId: string,
+  ): Promise<StoredSourceItem | undefined> {
+    this.assertOpen();
+
+    const row = this.db
+      .prepare<[string], SourceItemRow>(
+        `SELECT
+          source_item_id,
+          turn_id,
+          item_index,
+          raw_pointer_id,
+          raw_start_byte_offset,
+          raw_end_byte_offset,
+          rendered_excerpt,
+          context_action,
+          action_reason,
+          created_at
+        FROM source_items
+        WHERE source_item_id = ?`,
+      )
+      .get(sourceItemId);
+
+    if (!row) {
+      return undefined;
+    }
+
+    return mapSourceItemRow(row, this.getSourceLabels([sourceItemId]));
+  }
+
+  async listTurnSourceItems(turnId: string): Promise<StoredSourceItem[]> {
+    this.assertOpen();
+
+    const rows = this.db
+      .prepare<[string], SourceItemRow>(
+        `SELECT
+          source_item_id,
+          turn_id,
+          item_index,
+          raw_pointer_id,
+          raw_start_byte_offset,
+          raw_end_byte_offset,
+          rendered_excerpt,
+          context_action,
+          action_reason,
+          created_at
+        FROM source_items
+        WHERE turn_id = ?
+        ORDER BY item_index ASC`,
+      )
+      .all(turnId);
+
+    return this.mapSourceItemRows(rows);
+  }
+
+  async listThreadSourceItems(threadId: string): Promise<StoredSourceItem[]> {
+    this.assertOpen();
+
+    const normalizedThreadId = normalizeThreadId(threadId);
+    const rows = this.db
+      .prepare<[string], SourceItemRow>(
+        `SELECT
+          source_items.source_item_id,
+          source_items.turn_id,
+          source_items.item_index,
+          source_items.raw_pointer_id,
+          source_items.raw_start_byte_offset,
+          source_items.raw_end_byte_offset,
+          source_items.rendered_excerpt,
+          source_items.context_action,
+          source_items.action_reason,
+          source_items.created_at
+        FROM source_items
+        INNER JOIN transcript_turns
+          ON transcript_turns.turn_id = source_items.turn_id
+        WHERE transcript_turns.thread_id = ?
+        ORDER BY transcript_turns.turn_index ASC, source_items.item_index ASC`,
+      )
+      .all(normalizedThreadId);
+
+    return this.mapSourceItemRows(rows);
+  }
+
   async listThreadTurns(threadId: string): Promise<StoredTranscriptTurn[]> {
     this.assertOpen();
 
@@ -280,7 +421,112 @@ class SqliteTranscriptStore implements TranscriptStore {
 
       CREATE INDEX IF NOT EXISTS transcript_turns_thread_order_idx
         ON transcript_turns(thread_id, turn_index);
+
+      CREATE TABLE IF NOT EXISTS source_items (
+        source_item_id TEXT PRIMARY KEY,
+        turn_id TEXT NOT NULL,
+        item_index INTEGER NOT NULL CHECK (item_index >= 0),
+        raw_pointer_id TEXT NOT NULL,
+        raw_start_byte_offset INTEGER
+          CHECK (raw_start_byte_offset IS NULL OR raw_start_byte_offset >= 0),
+        raw_end_byte_offset INTEGER
+          CHECK (raw_end_byte_offset IS NULL OR raw_end_byte_offset >= 0),
+        rendered_excerpt TEXT NOT NULL,
+        context_action TEXT NOT NULL
+          CHECK (context_action IN ('preserve_exact', 'compact', 'discard')),
+        action_reason TEXT NOT NULL CHECK (length(action_reason) > 0),
+        created_at TEXT NOT NULL,
+        UNIQUE (turn_id, item_index),
+        CHECK (
+          (
+            raw_start_byte_offset IS NULL
+            AND raw_end_byte_offset IS NULL
+          )
+          OR (
+            raw_start_byte_offset IS NOT NULL
+            AND raw_end_byte_offset IS NOT NULL
+            AND raw_end_byte_offset > raw_start_byte_offset
+          )
+        ),
+        FOREIGN KEY (turn_id)
+          REFERENCES transcript_turns(turn_id)
+          ON UPDATE RESTRICT
+          ON DELETE RESTRICT,
+        FOREIGN KEY (raw_pointer_id)
+          REFERENCES raw_blobs(raw_pointer_id)
+          ON UPDATE RESTRICT
+          ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS source_items_turn_order_idx
+        ON source_items(turn_id, item_index);
+
+      CREATE INDEX IF NOT EXISTS source_items_raw_pointer_idx
+        ON source_items(raw_pointer_id);
+
+      CREATE TABLE IF NOT EXISTS source_labels (
+        source_item_id TEXT NOT NULL,
+        label TEXT NOT NULL CHECK (length(label) > 0),
+        label_index INTEGER NOT NULL DEFAULT 0 CHECK (label_index >= 0),
+        PRIMARY KEY (source_item_id, label),
+        UNIQUE (source_item_id, label_index),
+        FOREIGN KEY (source_item_id)
+          REFERENCES source_items(source_item_id)
+          ON UPDATE RESTRICT
+          ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS source_labels_item_order_idx
+        ON source_labels(source_item_id, label_index);
     `);
+  }
+
+  private mapSourceItemRows(rows: SourceItemRow[]): StoredSourceItem[] {
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const labelsByItemId = this.getSourceLabels(
+      rows.map((row) => row.source_item_id),
+    );
+
+    return rows.map((row) => mapSourceItemRow(row, labelsByItemId));
+  }
+
+  private getSourceLabels(
+    sourceItemIds: string[],
+  ): Map<string, SourceLabel[]> {
+    const labelsByItemId = new Map<string, SourceLabel[]>();
+
+    for (const sourceItemId of sourceItemIds) {
+      labelsByItemId.set(sourceItemId, []);
+    }
+
+    if (sourceItemIds.length === 0) {
+      return labelsByItemId;
+    }
+
+    const placeholders = sourceItemIds.map(() => "?").join(", ");
+    const rows = this.db
+      .prepare<unknown[], SourceLabelRow>(
+        `SELECT
+          source_item_id,
+          label
+        FROM source_labels
+        WHERE source_item_id IN (${placeholders})
+        ORDER BY source_item_id ASC, label_index ASC, label ASC`,
+      )
+      .all(...sourceItemIds);
+
+    for (const row of rows) {
+      const labels = labelsByItemId.get(row.source_item_id);
+
+      if (labels) {
+        labels.push(normalizeSourceLabel(row.label));
+      }
+    }
+
+    return labelsByItemId;
   }
 
   private getOrCreateRawBlob(
@@ -558,6 +804,67 @@ function mapTranscriptTurnRow(row: TranscriptTurnRow): StoredTranscriptTurn {
     createdAt: row.created_at,
   };
 }
+
+function mapSourceItemRow(
+  row: SourceItemRow,
+  labelsByItemId: Map<string, SourceLabel[]>,
+): StoredSourceItem {
+  return {
+    sourceItemId: row.source_item_id,
+    turnId: row.turn_id,
+    itemIndex: row.item_index,
+    rawPointerId: row.raw_pointer_id,
+    rawStartByteOffset: row.raw_start_byte_offset,
+    rawEndByteOffset: row.raw_end_byte_offset,
+    renderedExcerpt: row.rendered_excerpt,
+    contextAction: normalizeContextAction(row.context_action),
+    actionReason: row.action_reason,
+    labels: labelsByItemId.get(row.source_item_id) ?? [],
+    createdAt: row.created_at,
+  };
+}
+
+function normalizeContextAction(contextAction: string): ContextAction {
+  if (
+    contextAction !== "preserve_exact" &&
+    contextAction !== "compact" &&
+    contextAction !== "discard"
+  ) {
+    throw new Error(`Unsupported context action: ${contextAction}`);
+  }
+
+  return contextAction;
+}
+
+function normalizeSourceLabel(label: string): SourceLabel {
+  if (SOURCE_LABELS.has(label)) {
+    return label as SourceLabel;
+  }
+
+  throw new Error(`Unsupported source label: ${label}`);
+}
+
+const SOURCE_LABELS = new Set<string>([
+  "acceptance_criterion",
+  "api_name",
+  "code_reference",
+  "command",
+  "design_decision",
+  "error_message",
+  "exact_value",
+  "external_fact",
+  "file_output",
+  "file_path",
+  "open_question",
+  "project_convention",
+  "reasoning",
+  "rule",
+  "task_state",
+  "test_result",
+  "tool_output",
+  "user_instruction",
+  "exploration",
+]);
 
 function parseJsonStringArray(value: string, columnName: string): string[] {
   const parsed = JSON.parse(value) as unknown;
