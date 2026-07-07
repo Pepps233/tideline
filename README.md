@@ -1,3 +1,5 @@
+<img width="2710" height="1040" alt="tideline" src="https://github.com/user-attachments/assets/59518cde-0566-4e7c-bf07-4350592130b2" />
+
 # Tideline
 
 Tideline is an external context assembly layer for coding agents.
@@ -54,26 +56,7 @@ corepack enable
 pnpm install
 ```
 
-Before the first runnable release, deployment assets will be added under `infra/compose/` for PostgreSQL with pgvector, MinIO, Valkey, API services, workers, and supporting development services.
-Environment setup and Compose startup instructions will be documented with those assets when they exist.
-
-## Repository Shape
-
-The workspace is organized around future service and package boundaries.
-`apps/web` is reserved for the future Next.js admin and debug UI.
-`packages/api` is reserved for the future Fastify HTTP, admin, and debug API boundary.
-`packages/core` is reserved for the future context model, splitting, labeling, action selection, block construction, and assembly logic.
-`packages/db` is reserved for future PostgreSQL schema, Kysely migrations, repositories, and transaction helpers.
-`packages/storage` is reserved for future blob storage abstractions for MinIO and local development storage.
-`packages/mcp` is reserved for future MCP tools, resources, and transport setup.
-`packages/worker` is reserved for future BullMQ processors for compaction, indexing, cleanup, and model tasks.
-`packages/shared` is reserved for future Zod schemas, shared types, constants, and cross-package contracts.
-`infra` is reserved for self-host deployment assets.
-`docs` is reserved for architecture, operations, and product concepts.
-`scripts` is reserved for repository maintenance and developer automation.
-
 ## License
 
 Tideline is licensed under the Apache License, Version 2.0.
 See [LICENSE](LICENSE) for the full license text.
-

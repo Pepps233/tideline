@@ -1,12 +1,6 @@
 import Database from "better-sqlite3";
 import { createHash, randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import type BetterSqlite3 from "better-sqlite3";
@@ -161,6 +155,12 @@ interface LineSpan {
 interface SqliteNextTurnIndexRow {
   next_turn_index: number;
 }
+
+const mediaTypeToken = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+const mediaTypePattern = new RegExp(
+  `^${mediaTypeToken}/${mediaTypeToken}(?: *; *${mediaTypeToken}=(?:${mediaTypeToken}|"[^"\\\\]*"))*$`,
+);
+const controlCharacterPattern = /[\u0000-\u001F\u007F]/u;
 
 export async function createTranscriptStore(
   options: CreateTranscriptStoreOptions,
@@ -436,7 +436,7 @@ class SqliteTranscriptStore implements TranscriptStore {
         storage_kind TEXT NOT NULL CHECK (storage_kind = 'file'),
         storage_path TEXT NOT NULL CHECK (length(storage_path) > 0),
         created_at TEXT NOT NULL,
-        UNIQUE (sha256, byte_length)
+        UNIQUE (sha256, byte_length, media_type)
       );
 
       CREATE TABLE IF NOT EXISTS transcript_turns (
@@ -636,7 +636,7 @@ class SqliteTranscriptStore implements TranscriptStore {
     const sha256 = hashBytes(raw);
     const byteLength = raw.byteLength;
     const existing = this.db
-      .prepare<[string, number], RawBlobRow>(
+      .prepare<[string, number, string], RawBlobRow>(
         `SELECT
           raw_pointer_id,
           sha256,
@@ -645,9 +645,9 @@ class SqliteTranscriptStore implements TranscriptStore {
           storage_kind,
           storage_path
         FROM raw_blobs
-        WHERE sha256 = ? AND byte_length = ?`,
+        WHERE sha256 = ? AND byte_length = ? AND media_type = ?`,
       )
-      .get(sha256, byteLength);
+      .get(sha256, byteLength, mediaType);
 
     if (existing) {
       const pointer = mapRawBlobRow(existing);
@@ -759,29 +759,17 @@ class SqliteTranscriptStore implements TranscriptStore {
   ): void {
     const blobPath = this.resolveBlobPath(storagePath);
 
-    if (existsSync(blobPath)) {
-      const existing = readBlobFile(blobPath, storagePath);
-      if (
-        existing.byteLength !== expectedByteLength ||
-        hashBytes(existing) !== expectedSha
-      ) {
-        throw new Error(`Raw blob SHA mismatch at ${storagePath}`);
-      }
-
-      return;
-    }
-
     try {
       writeFileSync(blobPath, raw, { flag: "wx", mode: 0o600 });
     } catch (error) {
       if (isNodeError(error) && error.code === "EEXIST") {
-        const existing = readBlobFile(blobPath, storagePath);
-        if (
-          existing.byteLength === expectedByteLength &&
-          hashBytes(existing) === expectedSha
-        ) {
-          return;
-        }
+        verifyExistingBlob(
+          blobPath,
+          storagePath,
+          expectedSha,
+          expectedByteLength,
+        );
+        return;
       }
 
       throw error;
@@ -851,6 +839,13 @@ function normalizeMediaType(
 
     if (normalized.length === 0) {
       throw new Error("mediaType must not be empty");
+    }
+
+    if (
+      controlCharacterPattern.test(normalized) ||
+      !mediaTypePattern.test(normalized)
+    ) {
+      throw new Error("mediaType must be a valid media type");
     }
 
     return normalized;
@@ -1558,6 +1553,21 @@ function readBlobFile(blobPath: string, rawPointerId: string): Buffer {
     throw new Error(
       `Raw blob unreadable for raw pointer ${rawPointerId}: ${messageFromError(error)}`,
     );
+  }
+}
+
+function verifyExistingBlob(
+  blobPath: string,
+  storagePath: string,
+  expectedSha: string,
+  expectedByteLength: number,
+): void {
+  const existing = readBlobFile(blobPath, storagePath);
+  if (
+    existing.byteLength !== expectedByteLength ||
+    hashBytes(existing) !== expectedSha
+  ) {
+    throw new Error(`Raw blob SHA mismatch at ${storagePath}`);
   }
 }
 
