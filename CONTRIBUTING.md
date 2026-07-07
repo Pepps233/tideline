@@ -64,4 +64,3 @@ Document every command or manual validation step in the PR's Testing section.
 Generated files must be produced by the documented tool that owns them.
 Do not hand-edit generated artifacts.
 If a generated file changes unexpectedly, explain the generator command and why the output changed.
-
