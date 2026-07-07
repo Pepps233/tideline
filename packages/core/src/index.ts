@@ -79,6 +79,12 @@ interface SqliteNextTurnIndexRow {
   next_turn_index: number;
 }
 
+const mediaTypeToken = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
+const mediaTypePattern = new RegExp(
+  `^${mediaTypeToken}/${mediaTypeToken}(?: *; *${mediaTypeToken}=(?:${mediaTypeToken}|"[^"\\\\]*"))*$`,
+);
+const controlCharacterPattern = /[\u0000-\u001F\u007F]/u;
+
 export async function createTranscriptStore(
   options: CreateTranscriptStoreOptions,
 ): Promise<TranscriptStore> {
@@ -506,6 +512,13 @@ function normalizeMediaType(
 
     if (normalized.length === 0) {
       throw new Error("mediaType must not be empty");
+    }
+
+    if (
+      controlCharacterPattern.test(normalized) ||
+      !mediaTypePattern.test(normalized)
+    ) {
+      throw new Error("mediaType must be a valid media type");
     }
 
     return normalized;

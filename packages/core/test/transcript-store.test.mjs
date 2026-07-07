@@ -406,6 +406,16 @@ test("rejects invalid append inputs clearly", async (t) => {
       }),
     /turnRole|role|user|model/i,
   );
+  await assert.rejects(
+    async () =>
+      await store.appendTurn({
+        threadId: "thread-a",
+        turnRole: "user",
+        raw: "unsafe media type",
+        mediaType: "text/plain\r\nx-injected: yes",
+      }),
+    /mediaType|control|invalid/i,
+  );
 });
 
 test("reports dangling raw pointers clearly", async (t) => {
