@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { isUtf8 } from "node:buffer";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -882,6 +883,22 @@ function createSourceItemDrafts(input: {
     ];
   }
 
+  if (!isUtf8(input.raw)) {
+    return [
+      {
+        rawStartByteOffset: null,
+        rawEndByteOffset: null,
+        renderedExcerpt: boundedUndecodableTextExcerpt(
+          input.mediaType,
+          input.raw,
+        ),
+        contextAction: "compact",
+        actionReason: "compact:undecodable_text",
+        labels: ["file_output"],
+      },
+    ];
+  }
+
   const text = input.raw.toString("utf8");
   const chunks = splitTextIntoChunks(text);
   const seenExcerpts = new Set<string>();
@@ -944,6 +961,14 @@ function isTextMediaType(mediaType: string): boolean {
 
 function boundedNonTextExcerpt(mediaType: string, raw: Buffer): string {
   const excerpt = `Non-text source item: ${mediaType}, ${raw.byteLength} bytes`;
+
+  return excerpt.length <= NON_TEXT_EXCERPT_MAX_CHARS
+    ? excerpt
+    : excerpt.slice(0, NON_TEXT_EXCERPT_MAX_CHARS);
+}
+
+function boundedUndecodableTextExcerpt(mediaType: string, raw: Buffer): string {
+  const excerpt = `Undecodable text source item: ${mediaType}, ${raw.byteLength} bytes`;
 
   return excerpt.length <= NON_TEXT_EXCERPT_MAX_CHARS
     ? excerpt
@@ -1081,8 +1106,14 @@ function findSplitPoint(
     };
   }
 
+  const safeMaxEndChar = previousCodePointBoundary(
+    text,
+    maxEndChar,
+    startChar,
+    regionEndChar,
+  );
   const searchStartChar = startChar + 1;
-  const blankLineIndex = text.lastIndexOf("\n\n", maxEndChar);
+  const blankLineIndex = text.lastIndexOf("\n\n", safeMaxEndChar);
 
   if (blankLineIndex >= searchStartChar) {
     return {
@@ -1091,7 +1122,7 @@ function findSplitPoint(
     };
   }
 
-  const newlineIndex = text.lastIndexOf("\n", maxEndChar);
+  const newlineIndex = text.lastIndexOf("\n", safeMaxEndChar);
 
   if (newlineIndex >= searchStartChar) {
     return {
@@ -1101,9 +1132,61 @@ function findSplitPoint(
   }
 
   return {
-    endChar: maxEndChar,
-    nextStartChar: maxEndChar,
+    endChar: safeMaxEndChar,
+    nextStartChar: safeMaxEndChar,
   };
+}
+
+function previousCodePointBoundary(
+  text: string,
+  index: number,
+  startChar: number,
+  regionEndChar: number,
+): number {
+  if (index <= startChar || index >= regionEndChar || index >= text.length) {
+    return index;
+  }
+
+  if (!isLowSurrogate(text.charCodeAt(index))) {
+    return index;
+  }
+
+  const previousIndex = index - 1;
+
+  if (
+    previousIndex > startChar &&
+    isHighSurrogate(text.charCodeAt(previousIndex))
+  ) {
+    return previousIndex;
+  }
+
+  return nextCodePointBoundary(text, startChar, regionEndChar);
+}
+
+function nextCodePointBoundary(
+  text: string,
+  startChar: number,
+  regionEndChar: number,
+): number {
+  const nextChar = Math.min(startChar + 1, regionEndChar);
+
+  if (
+    nextChar < regionEndChar &&
+    isHighSurrogate(text.charCodeAt(startChar)) &&
+    isLowSurrogate(text.charCodeAt(nextChar))
+  ) {
+    return Math.min(startChar + 2, regionEndChar);
+  }
+
+  return nextChar;
+}
+
+function isHighSurrogate(charCode: number): boolean {
+  return charCode >= 0xd800 && charCode <= 0xdbff;
+}
+
+function isLowSurrogate(charCode: number): boolean {
+  return charCode >= 0xdc00 && charCode <= 0xdfff;
 }
 
 function classifySourceLabels(
@@ -1230,19 +1313,19 @@ function chooseContextAction(input: {
     };
   }
 
+  if (input.isDuplicate) {
+    return {
+      contextAction: "discard",
+      actionReason: "discard:duplicate_in_turn",
+    };
+  }
+
   const exactReason = exactActionReason(input.labels);
 
   if (exactReason) {
     return {
       contextAction: "preserve_exact",
       actionReason: exactReason,
-    };
-  }
-
-  if (input.isDuplicate) {
-    return {
-      contextAction: "discard",
-      actionReason: "discard:duplicate_in_turn",
     };
   }
 

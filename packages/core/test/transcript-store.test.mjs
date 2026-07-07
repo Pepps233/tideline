@@ -680,6 +680,75 @@ test("appends model turns with commands, failures, long logs, decisions, and rep
   assert.deepEqual(repeatedProgress.labels, []);
 });
 
+test("discards duplicate exact source items within one turn", async (t) => {
+  const { store } = await createIsolatedStore(t);
+  const raw = [
+    "Please keep CHANGELOG.md untouched.",
+    "",
+    "Please keep CHANGELOG.md untouched.",
+  ].join("\n");
+
+  const turn = await store.appendTurn({
+    threadId: "thread-duplicate-source-items",
+    turnRole: "user",
+    raw,
+  });
+  const items = await store.listTurnSourceItems(turn.turnId);
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0].contextAction, "preserve_exact");
+  assert.equal(items[0].actionReason, "preserve_exact:user_instruction");
+  assert.equal(items[1].contextAction, "discard");
+  assert.equal(items[1].actionReason, "discard:duplicate_in_turn");
+  assert.ok(items[1].labels.includes("user_instruction"));
+  assert.ok(items[1].labels.includes("exact_value"));
+});
+
+test("keeps text chunk byte offsets valid across surrogate boundaries", async (t) => {
+  const { store } = await createIsolatedStore(t);
+  const nonBmp = String.fromCodePoint(0x1f4a1);
+  const raw = `A${nonBmp.repeat(3000)}Z`;
+
+  const turn = await store.appendTurn({
+    threadId: "thread-surrogate-boundaries",
+    turnRole: "model",
+    raw,
+  });
+  const items = await store.listTurnSourceItems(turn.turnId);
+  const rawBytes = await store.readTurnRaw(turn.turnId);
+
+  assert.ok(items.length > 1);
+
+  for (const item of items) {
+    assertTextOffsets(rawBytes, item);
+    assert.doesNotMatch(item.renderedExcerpt, /[\uD800-\uDFFF]/u);
+  }
+});
+
+test("compacts text media bytes that are not valid UTF-8", async (t) => {
+  const { store } = await createIsolatedStore(t);
+  const raw = Uint8Array.from([0xff, 0xfe, 0xfd]);
+
+  const turn = await store.appendTurn({
+    threadId: "thread-invalid-utf8",
+    turnRole: "model",
+    raw,
+    mediaType: "text/plain; charset=utf-8",
+  });
+  const items = await store.listTurnSourceItems(turn.turnId);
+
+  assert.equal(items.length, 1);
+
+  const [item] = items;
+  assert.equal(item.rawStartByteOffset, null);
+  assert.equal(item.rawEndByteOffset, null);
+  assert.equal(item.contextAction, "compact");
+  assert.equal(item.actionReason, "compact:undecodable_text");
+  assert.deepEqual(item.labels, ["file_output"]);
+  assert.match(item.renderedExcerpt, /Undecodable text source item/);
+  assert.match(item.renderedExcerpt, /3 bytes/);
+});
+
 test("appends non-text turns with one compact synthetic source item", async (t) => {
   const { store } = await createIsolatedStore(t);
   const raw = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0xfa]);
