@@ -75,4 +75,3 @@ Consequence means a permanent restriction from any public interaction within pro
 ## Attribution
 
 This code of conduct is adapted from the Contributor Covenant, version 2.1.
-
