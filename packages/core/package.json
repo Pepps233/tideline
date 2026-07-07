@@ -16,7 +16,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "format": "prettier --check .",
+    "format": "prettier --check --ignore-path ../../.prettierignore .",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm run build && node --test \"test/**/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
