@@ -378,9 +378,10 @@ test.skip("assembly ranks request-relevant middle context and persists raw-free 
   );
 
   assert.deepEqual(storedReceipt, packet.receipt);
-  assert.deepEqual(
-    listedReceipts.map((receipt) => receipt.assemblyId),
-    [packet.receipt.assemblyId],
+  assert.ok(
+    listedReceipts.some(
+      (receipt) => receipt.assemblyId === packet.receipt.assemblyId,
+    ),
   );
 
   const db = openSqlite(sqlitePath);

@@ -4,9 +4,14 @@ import type {
   BuildContextBlocksInput as CoreBuildContextBlocksInput,
   CaptureTurnEventInput,
   CaptureTurnEventReceipt,
+  EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
+  SearchContextInput,
+  SearchContextResult,
+  StoredAssemblyReceipt,
   StoredContextBlock as CoreStoredContextBlock,
+  StoredRelationship,
   TranscriptStore as CoreTranscriptStore,
 } from "./types.js";
 
@@ -23,11 +28,18 @@ export type {
   CaptureTurnEventReceipt,
   ContextAction,
   CreateTranscriptStoreOptions,
+  EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
   ExpandedContextBlockSource,
   RawBlobPointer,
+  RelationshipEntityType,
+  RelationshipType,
+  SearchContextInput,
+  SearchContextResult,
   SourceLabel,
+  StoredAssemblyReceipt,
+  StoredRelationship,
   StoredSourceItem,
   StoredTranscriptTurn,
   TranscriptRole,
@@ -51,5 +63,14 @@ export interface TranscriptStore extends CoreTranscriptStore {
   getContextBlock(
     contextBlockId: string,
   ): Promise<StoredContextBlock | undefined>;
+  getAssemblyReceipt(
+    assemblyId: string,
+  ): Promise<StoredAssemblyReceipt | undefined>;
+  listThreadAssemblyReceipts(
+    threadId: string,
+  ): Promise<StoredAssemblyReceipt[]>;
   listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
+  listThreadRelationships(threadId: string): Promise<StoredRelationship[]>;
+  refreshThreadSearchIndex(threadId: string): Promise<void>;
+  searchContext(input: SearchContextInput): Promise<SearchContextResult>;
 }

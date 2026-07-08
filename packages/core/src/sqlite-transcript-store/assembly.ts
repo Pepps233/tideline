@@ -16,6 +16,10 @@ import type {
   AssembledContextPacket,
   AssembledContextSection,
   AssemblyReceipt,
+  AssemblyReceiptEntityType,
+  EmbeddingProvider,
+  RelationshipEntityType,
+  SearchContextTextKind,
   SourceLabel,
   StoredContextBlock,
   StoredSourceItem,
@@ -23,6 +27,12 @@ import type {
 } from "../types.js";
 import { normalizeThreadId } from "../validation.js";
 import { listThreadContextBlocks } from "./context-blocks.js";
+import {
+  insertAssemblyReceipt,
+  listSupersededContextBlockIds,
+  rankAssemblyCandidates,
+} from "./retrieval.js";
+import type { AssemblyRankingCandidate } from "./retrieval.js";
 
 interface TranscriptTurnWithMediaType extends StoredTranscriptTurn {
   mediaType: string;
@@ -36,6 +46,40 @@ interface SourceItemWithTurnRow extends SourceItemRow {
   turn_index: number;
 }
 
+interface MiddleCandidate {
+  baseOrder: number;
+  entityId: string;
+  entityType: RelationshipEntityType;
+  item: AssembledContextItem;
+  labels: SourceLabel[];
+  sectionKind:
+    "exact_source_items" | "open_questions" | "compacted_context_blocks";
+  textKind: SearchContextTextKind;
+  turnIndex: number;
+}
+
+interface ScoredMiddleCandidate extends MiddleCandidate {
+  reasons: string[];
+  score: number;
+}
+
+interface ReceiptItemDraft {
+  entityType: AssemblyReceiptEntityType;
+  entityId: string;
+  sectionKind: AssembledContextSection["kind"];
+  included: boolean;
+  estimatedTokens: number;
+  score: number;
+  reasons: string[];
+  omitReason?: string | undefined;
+}
+
+interface IncludeRenderedItemResult {
+  included: boolean;
+  estimatedTokens: number;
+  omitReason?: string | undefined;
+}
+
 const SECTION_ORDER: AssembledContextSection["kind"][] = [
   "full_transcript_anchors",
   "recent_full_transcript",
@@ -44,10 +88,6 @@ const SECTION_ORDER: AssembledContextSection["kind"][] = [
   "compacted_context_blocks",
   "expandable_sources",
 ];
-
-const RENDERED_SECTION_ORDER = SECTION_ORDER.filter(
-  (kind) => kind !== "expandable_sources",
-);
 
 const SECTION_TITLES: Record<AssembledContextSection["kind"], string> = {
   full_transcript_anchors: "Full transcript anchors",
@@ -63,6 +103,7 @@ const NON_TEXT_PLACEHOLDER_MAX_LENGTH = 120;
 export async function assembleContext(input: {
   clock: () => Date | string;
   db: BetterSqlite3.Database;
+  embeddingProvider: EmbeddingProvider;
   readTurnRaw: (turnId: string) => Promise<Uint8Array>;
   request: AssembleContextInput;
 }): Promise<AssembledContextPacket> {
@@ -126,6 +167,10 @@ export async function assembleContext(input: {
   const contextBlocksById = new Map(
     compactBlocks.map((block) => [block.contextBlockId, block]),
   );
+  const supersededContextBlockIds = listSupersededContextBlockIds(
+    input.db,
+    threadId,
+  );
   const coveredCompactItemIds = new Set(
     compactBlocks.flatMap((block) =>
       block.sourceItemIds.filter((sourceItemId) =>
@@ -147,105 +192,154 @@ export async function assembleContext(input: {
     "recent",
     input.readTurnRaw,
   );
-  const sectionCandidates = new Map<
+  const middleCandidates = await scoreMiddleCandidates({
+    compactBlocks,
+    db: input.db,
+    embeddingProvider: input.embeddingProvider,
+    exactItems,
+    openQuestionItems,
+    recentItems,
+    request: input.request,
+    sourceItemsById,
+    threadId,
+  });
+  const sectionItems = new Map<
     AssembledContextSection["kind"],
     AssembledContextItem[]
-  >([
-    ["full_transcript_anchors", anchorItems],
-    ["recent_full_transcript", recentItems],
-    [
-      "exact_source_items",
-      exactItems.map((item) =>
-        createExactSourceItem(item, "preserve exact source item"),
-      ),
-    ],
-    [
-      "open_questions",
-      openQuestionItems.map((item) =>
-        createExactSourceItem(item, "open question preserved exactly"),
-      ),
-    ],
-    [
-      "compacted_context_blocks",
-      compactBlocks.map((block) => createContextBlockItem(block)),
-    ],
-  ]);
+  >(SECTION_ORDER.map((kind) => [kind, []]));
   const receipt: AssemblyReceipt = {
     assemblyId: randomUUID(),
     threadId,
     activeTurn,
+    status: "assembled",
     includedFullTurnIds: [],
     middleTurnIds: middleTurns.map((turn) => turn.turnId),
     exactSourceItemIds: [],
     contextBlockIds: [],
     discardedSourceItemIds,
     estimatedTokens: 0,
+    items: [],
     createdAt,
   };
-  const sections: AssembledContextSection[] = [];
+  const receiptItems: ReceiptItemDraft[] = [];
   const includedExactItems: SourceItemWithTurn[] = [];
   const includedOpenQuestionItems: SourceItemWithTurn[] = [];
   const includedContextBlocks: StoredContextBlock[] = [];
   let estimatedTokens = 0;
 
-  for (const kind of RENDERED_SECTION_ORDER) {
-    const candidates = sectionCandidates.get(kind) ?? [];
-    const items: AssembledContextItem[] = [];
+  for (const item of anchorItems) {
+    const includeResult = includeRenderedItem({
+      estimatedTokens,
+      item,
+      renderedRegistry,
+      tokenBudget,
+    });
 
-    for (const item of candidates) {
-      const itemTokens = estimateTextTokens(item.text);
+    if (includeResult.included) {
+      sectionItems.get("full_transcript_anchors")?.push(item);
+      estimatedTokens += includeResult.estimatedTokens;
 
-      if (
-        tokenBudget !== undefined &&
-        estimatedTokens + itemTokens > tokenBudget
-      ) {
-        continue;
-      }
-
-      if (!registerRenderedItem(renderedRegistry, item)) {
-        continue;
-      }
-
-      items.push(item);
-      estimatedTokens += itemTokens;
-
-      if (item.sourceType === "turn" && item.turnId) {
+      if (item.turnId) {
         receipt.includedFullTurnIds.push(item.turnId);
       }
+    }
 
-      if (
-        (kind === "exact_source_items" || kind === "open_questions") &&
-        item.sourceItemIds
-      ) {
-        receipt.exactSourceItemIds.push(...item.sourceItemIds);
+    receiptItems.push({
+      entityType: "turn",
+      entityId: item.turnId ?? item.id,
+      sectionKind: "full_transcript_anchors",
+      included: includeResult.included,
+      estimatedTokens: includeResult.estimatedTokens,
+      score: 0,
+      reasons: [item.reason],
+      omitReason: includeResult.omitReason,
+    });
+  }
 
-        for (const sourceItemId of item.sourceItemIds) {
-          const sourceItem = sourceItemsById.get(sourceItemId);
+  for (const item of recentItems) {
+    const includeResult = includeRenderedItem({
+      estimatedTokens,
+      item,
+      renderedRegistry,
+      tokenBudget,
+    });
 
-          if (!sourceItem) {
-            continue;
-          }
+    if (includeResult.included) {
+      sectionItems.get("recent_full_transcript")?.push(item);
+      estimatedTokens += includeResult.estimatedTokens;
 
-          if (kind === "open_questions") {
-            includedOpenQuestionItems.push(sourceItem);
-          } else {
-            includedExactItems.push(sourceItem);
-          }
-        }
+      if (item.turnId) {
+        receipt.includedFullTurnIds.push(item.turnId);
       }
+    }
 
-      if (kind === "compacted_context_blocks" && item.contextBlockId) {
-        receipt.contextBlockIds.push(item.contextBlockId);
+    receiptItems.push({
+      entityType: "turn",
+      entityId: item.turnId ?? item.id,
+      sectionKind: "recent_full_transcript",
+      included: includeResult.included,
+      estimatedTokens: includeResult.estimatedTokens,
+      score: 0,
+      reasons: [item.reason],
+      omitReason: includeResult.omitReason,
+    });
+  }
 
-        const contextBlock = contextBlocksById.get(item.contextBlockId);
+  for (const candidate of orderMiddleCandidates(middleCandidates)) {
+    const isSuperseded =
+      candidate.entityType === "context_block" &&
+      supersededContextBlockIds.has(candidate.entityId);
+    const includeResult = isSuperseded
+      ? {
+          included: false,
+          estimatedTokens: estimateTextTokens(candidate.item.text),
+          omitReason: "superseded by newer context block",
+        }
+      : includeRenderedItem({
+          estimatedTokens,
+          item: candidate.item,
+          renderedRegistry,
+          tokenBudget,
+        });
 
+    if (includeResult.included) {
+      sectionItems.get(candidate.sectionKind)?.push(candidate.item);
+      estimatedTokens += includeResult.estimatedTokens;
+
+      if (candidate.sectionKind === "exact_source_items") {
+        receipt.exactSourceItemIds.push(candidate.entityId);
+
+        const sourceItem = sourceItemsById.get(candidate.entityId);
+        if (sourceItem) {
+          includedExactItems.push(sourceItem);
+        }
+      } else if (candidate.sectionKind === "open_questions") {
+        receipt.exactSourceItemIds.push(candidate.entityId);
+
+        const sourceItem = sourceItemsById.get(candidate.entityId);
+        if (sourceItem) {
+          includedOpenQuestionItems.push(sourceItem);
+        }
+      } else {
+        receipt.contextBlockIds.push(candidate.entityId);
+
+        const contextBlock = contextBlocksById.get(candidate.entityId);
         if (contextBlock) {
           includedContextBlocks.push(contextBlock);
         }
       }
     }
 
-    sections.push({ kind, title: SECTION_TITLES[kind], items });
+    receiptItems.push({
+      entityType: candidate.entityType,
+      entityId: candidate.entityId,
+      sectionKind: candidate.sectionKind,
+      included: includeResult.included,
+      estimatedTokens: includeResult.estimatedTokens,
+      score: candidate.score,
+      reasons: candidate.reasons,
+      omitReason: includeResult.omitReason,
+    });
   }
 
   const expandableCandidates = buildExpandableItems({
@@ -258,29 +352,68 @@ export async function assembleContext(input: {
   const expandableItems: AssembledContextItem[] = [];
 
   for (const item of expandableCandidates) {
-    const itemTokens = estimateTextTokens(item.text);
+    const includeResult = includeRenderedItem({
+      estimatedTokens,
+      item,
+      renderedRegistry,
+      tokenBudget,
+    });
 
-    if (
-      tokenBudget !== undefined &&
-      estimatedTokens + itemTokens > tokenBudget
-    ) {
-      continue;
+    if (includeResult.included) {
+      expandableItems.push(item);
+      estimatedTokens += includeResult.estimatedTokens;
     }
 
-    if (!registerRenderedItem(renderedRegistry, item)) {
-      continue;
-    }
-
-    expandableItems.push(item);
-    estimatedTokens += itemTokens;
+    receiptItems.push({
+      entityType: "source_item",
+      entityId: item.sourceItemIds?.[0] ?? item.id,
+      sectionKind: "expandable_sources",
+      included: includeResult.included,
+      estimatedTokens: includeResult.estimatedTokens,
+      score: 0,
+      reasons: [item.reason],
+      omitReason: includeResult.omitReason,
+    });
   }
 
-  sections.push({
-    kind: "expandable_sources",
-    title: SECTION_TITLES.expandable_sources,
-    items: expandableItems,
-  });
+  sectionItems.set("expandable_sources", expandableItems);
+
+  for (const turn of middleTurns) {
+    receiptItems.push({
+      entityType: "turn",
+      entityId: turn.turnId,
+      sectionKind: "expandable_sources",
+      included: false,
+      estimatedTokens: 0,
+      score: 0,
+      reasons: ["middle zone"],
+      omitReason: "middle turn tracked",
+    });
+  }
+
+  for (const sourceItemId of discardedSourceItemIds) {
+    receiptItems.push({
+      entityType: "source_item",
+      entityId: sourceItemId,
+      sectionKind: "expandable_sources",
+      included: false,
+      estimatedTokens: 0,
+      score: 0,
+      reasons: ["discarded source item"],
+      omitReason: "discarded source item",
+    });
+  }
+
+  const sections = SECTION_ORDER.map((kind) => ({
+    kind,
+    title: SECTION_TITLES[kind],
+    items: sectionItems.get(kind) ?? [],
+  }));
+
+  receipt.items = finalizeReceiptItems(receiptItems);
   receipt.estimatedTokens = estimatedTokens;
+
+  insertAssemblyReceipt(input.db, receipt);
 
   return {
     threadId,
@@ -288,6 +421,201 @@ export async function assembleContext(input: {
     sections,
     receipt,
   };
+}
+
+async function scoreMiddleCandidates(input: {
+  compactBlocks: StoredContextBlock[];
+  db: BetterSqlite3.Database;
+  embeddingProvider: EmbeddingProvider;
+  exactItems: SourceItemWithTurn[];
+  openQuestionItems: SourceItemWithTurn[];
+  recentItems: AssembledContextItem[];
+  request: AssembleContextInput;
+  sourceItemsById: Map<string, SourceItemWithTurn>;
+  threadId: string;
+}): Promise<ScoredMiddleCandidate[]> {
+  const candidates = createMiddleCandidates(input);
+  const hasRequestedRanking =
+    input.request.task !== undefined || input.request.scope !== undefined;
+  const queryText = hasRequestedRanking
+    ? [
+        input.request.task,
+        input.request.scope,
+        ...input.recentItems.map((item) => item.text),
+      ]
+        .filter((value): value is string => value !== undefined)
+        .join("\n")
+    : "";
+  const rankingCandidates: AssemblyRankingCandidate[] = candidates.map(
+    (candidate) => ({
+      key: middleCandidateKey(candidate),
+      entityType: candidate.entityType,
+      entityId: candidate.entityId,
+      textKind: candidate.textKind,
+      text: candidate.item.text,
+      labels: candidate.labels,
+      turnIndex: candidate.turnIndex,
+    }),
+  );
+  const scores = await rankAssemblyCandidates({
+    candidates: rankingCandidates,
+    db: input.db,
+    embeddingProvider: input.embeddingProvider,
+    queryText,
+    threadId: input.threadId,
+  });
+
+  return candidates.map((candidate) => {
+    const ranking = scores.get(middleCandidateKey(candidate)) ?? {
+      score: 0,
+      reasons: ["deterministic order"],
+    };
+
+    return {
+      ...candidate,
+      score: ranking.score,
+      reasons: ranking.reasons,
+    };
+  });
+}
+
+function createMiddleCandidates(input: {
+  compactBlocks: StoredContextBlock[];
+  exactItems: SourceItemWithTurn[];
+  openQuestionItems: SourceItemWithTurn[];
+  sourceItemsById: Map<string, SourceItemWithTurn>;
+}): MiddleCandidate[] {
+  const candidates: MiddleCandidate[] = [];
+  let baseOrder = 0;
+
+  for (const item of input.exactItems) {
+    candidates.push({
+      baseOrder,
+      entityId: item.sourceItemId,
+      entityType: "source_item",
+      item: createExactSourceItem(item, "preserve exact source item"),
+      labels: item.labels,
+      sectionKind: "exact_source_items",
+      textKind: "source_item_exact",
+      turnIndex: item.turnIndex,
+    });
+    baseOrder += 1;
+  }
+
+  for (const item of input.openQuestionItems) {
+    candidates.push({
+      baseOrder,
+      entityId: item.sourceItemId,
+      entityType: "source_item",
+      item: createExactSourceItem(item, "open question preserved exactly"),
+      labels: item.labels,
+      sectionKind: "open_questions",
+      textKind: "source_item_exact",
+      turnIndex: item.turnIndex,
+    });
+    baseOrder += 1;
+  }
+
+  for (const block of input.compactBlocks) {
+    const sourceItems = block.sourceItemIds
+      .map((sourceItemId) => input.sourceItemsById.get(sourceItemId))
+      .filter((item): item is SourceItemWithTurn => item !== undefined);
+    const earliestTurnIndex =
+      sourceItems.length > 0
+        ? Math.min(...sourceItems.map((item) => item.turnIndex))
+        : block.blockIndex;
+
+    candidates.push({
+      baseOrder,
+      entityId: block.contextBlockId,
+      entityType: "context_block",
+      item: createContextBlockItem(block),
+      labels: block.labels,
+      sectionKind: "compacted_context_blocks",
+      textKind: "context_block_summary",
+      turnIndex: earliestTurnIndex,
+    });
+    baseOrder += 1;
+  }
+
+  return candidates;
+}
+
+function orderMiddleCandidates(
+  candidates: ScoredMiddleCandidate[],
+): ScoredMiddleCandidate[] {
+  return [...candidates].sort(
+    (left, right) =>
+      right.score - left.score ||
+      sectionOrderIndex(left.sectionKind) -
+        sectionOrderIndex(right.sectionKind) ||
+      left.baseOrder - right.baseOrder ||
+      left.entityId.localeCompare(right.entityId),
+  );
+}
+
+function sectionOrderIndex(kind: AssembledContextSection["kind"]): number {
+  return SECTION_ORDER.indexOf(kind);
+}
+
+function includeRenderedItem(input: {
+  estimatedTokens: number;
+  item: AssembledContextItem;
+  renderedRegistry: RenderedRegistry;
+  tokenBudget: number | undefined;
+}): IncludeRenderedItemResult {
+  const itemTokens = estimateTextTokens(input.item.text);
+
+  if (
+    input.tokenBudget !== undefined &&
+    input.estimatedTokens + itemTokens > input.tokenBudget
+  ) {
+    return {
+      included: false,
+      estimatedTokens: itemTokens,
+      omitReason: "omitted by budget or rank",
+    };
+  }
+
+  if (!registerRenderedItem(input.renderedRegistry, input.item)) {
+    return {
+      included: false,
+      estimatedTokens: itemTokens,
+      omitReason: "duplicate rendered item",
+    };
+  }
+
+  return {
+    included: true,
+    estimatedTokens: itemTokens,
+  };
+}
+
+function middleCandidateKey(candidate: MiddleCandidate): string {
+  return `${candidate.entityType}:${candidate.entityId}:${candidate.textKind}`;
+}
+
+function finalizeReceiptItems(
+  receiptItems: ReceiptItemDraft[],
+): AssemblyReceipt["items"] {
+  return receiptItems.map((item, itemIndex) => {
+    const receiptItem: AssemblyReceipt["items"][number] = {
+      itemIndex,
+      entityType: item.entityType,
+      entityId: item.entityId,
+      sectionKind: item.sectionKind,
+      included: item.included,
+      estimatedTokens: item.estimatedTokens,
+      score: item.score,
+      reasons: item.reasons,
+    };
+
+    if (item.omitReason !== undefined) {
+      receiptItem.omitReason = item.omitReason;
+    }
+
+    return receiptItem;
+  });
 }
 
 function normalizeActiveTurn(activeTurn: number): number {
