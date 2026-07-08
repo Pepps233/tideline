@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 
 export { createTranscriptStore } from "./sqlite-transcript-store.js";
+export { resolveTidelineStorageConfig } from "./storage-config.js";
 export type {
   AppendTranscriptTurnInput,
   AssembleContextInput,
@@ -44,6 +45,10 @@ export type {
   StoredTranscriptTurn,
   TranscriptRole,
 } from "./types.js";
+export type {
+  ResolveTidelineStorageConfigInput,
+  TidelineStorageConfig,
+} from "./storage-config.js";
 
 export interface StoredContextBlock extends CoreStoredContextBlock {}
 

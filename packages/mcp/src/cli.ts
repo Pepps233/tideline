@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { createTranscriptStore } from "@tideline/core";
+import {
+  createTranscriptStore,
+  resolveTidelineStorageConfig,
+} from "@tideline/core";
 
 import { createTidelineMcpServer } from "./index.js";
 
@@ -32,16 +35,12 @@ function parseStorageConfig(
   env: NodeJS.ProcessEnv,
 ): StorageConfig {
   const parsed = parseArgs(args);
-  const sqlitePath = parsed.sqlitePath ?? env.TIDELINE_SQLITE_PATH;
-  const blobDir = parsed.blobDir ?? env.TIDELINE_BLOB_DIR;
 
-  if (!sqlitePath || !blobDir) {
-    throw new Error(
-      "Storage configuration is required. Provide --sqlite-path or TIDELINE_SQLITE_PATH and --blob-dir or TIDELINE_BLOB_DIR.",
-    );
-  }
-
-  return { sqlitePath, blobDir };
+  return resolveTidelineStorageConfig({
+    blobDir: parsed.blobDir,
+    env,
+    sqlitePath: parsed.sqlitePath,
+  });
 }
 
 function parseArgs(args: string[]): Partial<StorageConfig> {

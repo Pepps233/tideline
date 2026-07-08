@@ -51,9 +51,11 @@ It keeps transcript roles normalized to `user` and `model`.
 
 `@tideline/hooks` provides the `tideline-hook` CLI.
 The CLI reads one JSON event from stdin, writes one JSON receipt to stdout, and stores captured turns through `@tideline/core`.
+By default, it writes to `~/.tideline/tideline.sqlite` and `~/.tideline/blobs`.
 
 `@tideline/mcp` exposes the read surface for agents.
 It lists turns and context blocks, expands context blocks, and assembles sliding context without adding capture tools.
+By default, it reads from the same `~/.tideline` storage directory.
 
 ## Intended Self-Host Flow
 
@@ -65,6 +67,14 @@ cd tideline
 nvm use
 corepack enable
 pnpm install
+```
+
+For local use, both CLIs work without storage flags.
+The first run creates `~/.tideline`.
+
+```sh
+tideline-hook --thread-id my-session < event.json
+tideline-mcp
 ```
 
 ## License

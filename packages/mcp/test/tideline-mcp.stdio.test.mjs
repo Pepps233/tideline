@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -260,25 +259,30 @@ test("uses storage environment fallbacks for stdio startup", async (t) => {
   assert.deepEqual(blocks.structuredContent.contextBlocks, [fixture.block]);
 });
 
-test("fails fast when storage configuration is absent", async () => {
-  const child = spawn(process.execPath, [serverPath], {
-    env: cleanStorageEnv(),
-    stdio: ["ignore", "ignore", "pipe"],
+test("uses default storage under the home directory for stdio startup", async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), "tideline-mcp-home-"));
+  const sqlitePath = path.join(homeDir, ".tideline", "tideline.sqlite");
+  const blobDir = path.join(homeDir, ".tideline", "blobs");
+
+  t.after(async () => {
+    await rm(homeDir, { force: true, recursive: true });
   });
-  const stderrChunks = [];
 
-  child.stderr.on("data", (chunk) => stderrChunks.push(chunk));
-
-  const exit = await new Promise((resolve, reject) => {
-    child.on("error", reject);
-    child.on("exit", (code, signal) => resolve({ code, signal }));
+  const client = await connectClient(t, {
+    args: [serverPath],
+    env: {
+      HOME: homeDir,
+    },
   });
-  const stderr = Buffer.concat(stderrChunks).toString("utf8");
 
-  assert.notEqual(exit.code, 0);
-  assert.equal(exit.signal, null);
-  assert.match(stderr, /--sqlite-path|TIDELINE_SQLITE_PATH/i);
-  assert.match(stderr, /--blob-dir|TIDELINE_BLOB_DIR/i);
+  const turns = await client.callTool({
+    name: "list_thread_turns",
+    arguments: { thread_id: "thread-default-empty" },
+  });
+
+  assert.deepEqual(turns.structuredContent.turns, []);
+  assert.equal((await stat(path.dirname(sqlitePath))).isDirectory(), true);
+  assert.equal((await stat(blobDir)).isDirectory(), true);
 });
 
 async function createMcpFixture(t) {
@@ -362,6 +366,7 @@ function cleanStorageEnv() {
 
   delete env.TIDELINE_SQLITE_PATH;
   delete env.TIDELINE_BLOB_DIR;
+  delete env.TIDELINE_HOME;
   return env;
 }
 
