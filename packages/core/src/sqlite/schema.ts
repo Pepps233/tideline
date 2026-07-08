@@ -148,5 +148,42 @@ export function createSchema(db: BetterSqlite3.Database): void {
 
     CREATE INDEX IF NOT EXISTS context_block_source_items_source_item_idx
       ON context_block_source_items(source_item_id);
+
+    CREATE TABLE IF NOT EXISTS hook_processed_events (
+      event_id TEXT PRIMARY KEY CHECK (length(trim(event_id)) > 0),
+      thread_id TEXT NOT NULL CHECK (length(trim(thread_id)) > 0),
+      kind TEXT NOT NULL CHECK (
+        kind IN (
+          'session_start',
+          'prompt_submit',
+          'tool_result',
+          'model_response_complete',
+          'session_stop'
+        )
+      ),
+      receipt_json TEXT NOT NULL
+        CHECK (
+          json_valid(receipt_json)
+          AND json_type(receipt_json) = 'object'
+        ),
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS hook_processed_events_thread_idx
+      ON hook_processed_events(thread_id, created_at, event_id);
+
+    CREATE TABLE IF NOT EXISTS hook_pending_tool_events (
+      event_id TEXT PRIMARY KEY CHECK (length(trim(event_id)) > 0),
+      thread_id TEXT NOT NULL CHECK (length(trim(thread_id)) > 0),
+      created_at TEXT NOT NULL,
+      payload_json TEXT NOT NULL
+        CHECK (
+          json_valid(payload_json)
+          AND json_type(payload_json) = 'object'
+        )
+    );
+
+    CREATE INDEX IF NOT EXISTS hook_pending_tool_events_thread_order_idx
+      ON hook_pending_tool_events(thread_id, created_at, event_id);
   `);
 }

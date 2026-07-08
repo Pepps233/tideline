@@ -75,6 +75,35 @@ export interface AppendTranscriptTurnInput {
   createdAt?: Date | string;
 }
 
+export type CaptureTurnEventKind =
+  | "session_start"
+  | "prompt_submit"
+  | "tool_result"
+  | "model_response_complete"
+  | "session_stop";
+
+export interface CaptureTurnEventInput {
+  eventId: string;
+  kind: CaptureTurnEventKind;
+  threadId: string;
+  createdAt: Date | string;
+  payload?: Record<string, unknown>;
+}
+
+export interface CaptureTurnEventReceipt {
+  eventId: string;
+  kind: CaptureTurnEventKind;
+  threadId: string;
+  createdAt: string;
+  appendedTurnIds: string[];
+  flushedToolEventIds: string[];
+  contextBlockIds: string[];
+  timeline: {
+    turns: StoredTranscriptTurn[];
+    contextBlocks: StoredContextBlock[];
+  };
+}
+
 export interface BuildContextBlocksInput {
   threadId: string;
   groups: Array<{
@@ -167,6 +196,9 @@ export interface ExpandedContextBlock {
 
 export interface TranscriptStore {
   appendTurn(input: AppendTranscriptTurnInput): Promise<StoredTranscriptTurn>;
+  captureTurnEvent(
+    input: CaptureTurnEventInput,
+  ): Promise<CaptureTurnEventReceipt>;
   assembleContext(input: AssembleContextInput): Promise<AssembledContextPacket>;
   buildContextBlocks(
     input: BuildContextBlocksInput,
