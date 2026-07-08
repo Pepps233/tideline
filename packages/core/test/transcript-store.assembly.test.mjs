@@ -12,11 +12,17 @@ test("exports assembly public types and store method", async () => {
     new URL("../dist/index.d.ts", import.meta.url),
     "utf8",
   );
+  const typeDeclarations = await readFile(
+    new URL("../dist/types.d.ts", import.meta.url),
+    "utf8",
+  );
   const compactDeclarations = declarations.replace(/\s+/g, " ");
+  const compactTypeDeclarations = typeDeclarations.replace(/\s+/g, " ");
 
   assert.match(compactDeclarations, /\bAssembleContextInput\b/);
   assert.match(compactDeclarations, /\bAssembledContextPacket\b/);
   assert.match(compactDeclarations, /\bAssemblyReceipt\b/);
+  assert.match(compactTypeDeclarations, /title: string/);
   assert.match(
     compactDeclarations,
     /assembleContext\(input: AssembleContextInput\): Promise<AssembledContextPacket>/,
@@ -32,6 +38,12 @@ test("assembles anchors, recent transcript, middle exact items, context blocks, 
 
   assert.equal(packet.threadId, fixture.threadId);
   assert.equal(packet.activeTurn, 10);
+  assert.ok(
+    packet.sections.every(
+      (section) =>
+        typeof section.title === "string" && section.title.length > 0,
+    ),
+  );
   assert.deepEqual(
     packet.sections.map((section) => section.kind),
     [
@@ -191,6 +203,79 @@ test("shifts active turn zones by turn_index", async (t) => {
   assert.ok(exactSourceIds.includes(fixture.items.exactTurnFour.sourceItemId));
   assert.ok(exactSourceIds.includes(fixture.items.exactTurnNine.sourceItemId));
   assert.doesNotMatch(sectionText(packet), /current prompt should stay out/i);
+});
+
+test("excludes context blocks with out-of-zone source links", async (t) => {
+  const { store } = await createIsolatedStore(t);
+  const threadId = "thread-assembly-scoped-blocks";
+
+  await store.appendTurn({
+    threadId,
+    turnRole: "user",
+    raw: "Task: Anchor one sets the objective.",
+  });
+  await store.appendTurn({
+    threadId,
+    turnRole: "model",
+    raw: "Decision: Anchor two records the approach.",
+  });
+  await store.appendTurn({
+    threadId,
+    turnRole: "user",
+    raw: "Rules:\n- Keep scoped context blocks within prior turns.",
+  });
+  const middleTurn = await store.appendTurn({
+    threadId,
+    turnRole: "model",
+    raw: "I inspected middle cache because storage remains in progress.",
+  });
+  await store.appendTurn({
+    threadId,
+    turnRole: "model",
+    raw: "Decision: turn five is the recent transcript.",
+  });
+  const currentTurn = await store.appendTurn({
+    threadId,
+    turnRole: "model",
+    raw: "I inspected future secret because hidden prompt remains in progress.",
+  });
+  const middleCompact = findItemByText(
+    await store.listTurnSourceItems(middleTurn.turnId),
+    "middle cache because storage",
+  );
+  const currentCompact = findItemByText(
+    await store.listTurnSourceItems(currentTurn.turnId),
+    "future secret because hidden",
+  );
+
+  assert.equal(middleCompact.contextAction, "compact");
+  assert.equal(currentCompact.contextAction, "compact");
+  await store.buildContextBlocks({
+    threadId,
+    groups: [
+      {
+        sourceItemIds: [
+          middleCompact.sourceItemId,
+          currentCompact.sourceItemId,
+        ],
+      },
+    ],
+  });
+
+  const packet = await store.assembleContext({
+    threadId,
+    activeTurn: 6,
+  });
+
+  assert.deepEqual(getSection(packet, "compacted_context_blocks").items, []);
+  assert.doesNotMatch(sectionText(packet), /future secret/i);
+  assert.ok(
+    getSection(packet, "expandable_sources").items.some(
+      (item) =>
+        item.sourceItemIds?.includes(middleCompact.sourceItemId) &&
+        /no context block/i.test(item.reason),
+    ),
+  );
 });
 
 test("applies token budget in deterministic section order", async (t) => {
