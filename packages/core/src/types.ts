@@ -67,6 +67,29 @@ export interface StoredContextBlock {
   createdAt: string;
 }
 
+export interface EmbeddingProvider {
+  name: string;
+  dimensions: number;
+  embed(texts: string[]): Promise<number[][]>;
+}
+
+export type RelationshipType =
+  "derived_from" | "same_topic_as" | "refines" | "supersedes" | "resolved_by";
+
+export type RelationshipEntityType = "context_block" | "source_item";
+
+export interface StoredRelationship {
+  relationshipId: string;
+  threadId: string;
+  relationshipType: RelationshipType;
+  fromEntityType: RelationshipEntityType;
+  fromEntityId: string;
+  toEntityType: RelationshipEntityType;
+  toEntityId: string;
+  reason: string;
+  createdAt: string;
+}
+
 export interface AppendTranscriptTurnInput {
   threadId: string;
   turnRole: TranscriptRole;
@@ -125,6 +148,34 @@ export interface ExpandContextBlockInput {
   tokenBudget?: number;
 }
 
+export interface SearchContextInput {
+  threadId: string;
+  query: string;
+  limit?: number;
+}
+
+export type SearchContextEntityType = RelationshipEntityType;
+
+export type SearchContextTextKind =
+  | "context_block_summary"
+  | "source_item_exact"
+  | "source_item_uncovered_compact";
+
+export interface SearchContextResultItem {
+  entityType: SearchContextEntityType;
+  entityId: string;
+  textKind: SearchContextTextKind;
+  preview: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface SearchContextResult {
+  threadId: string;
+  query: string;
+  results: SearchContextResultItem[];
+}
+
 export type AssembledContextSectionKind =
   | "full_transcript_anchors"
   | "recent_full_transcript"
@@ -154,18 +205,37 @@ export interface AssembledContextSection {
   items: AssembledContextItem[];
 }
 
+export type AssemblyReceiptEntityType =
+  "turn" | "source_item" | "context_block";
+
+export interface AssemblyReceiptItem {
+  itemIndex: number;
+  entityType: AssemblyReceiptEntityType;
+  entityId: string;
+  sectionKind: AssembledContextSectionKind;
+  included: boolean;
+  estimatedTokens: number;
+  score: number;
+  reasons: string[];
+  omitReason?: string | undefined;
+}
+
 export interface AssemblyReceipt {
   assemblyId: string;
   threadId: string;
   activeTurn: number;
+  status: "assembled";
   includedFullTurnIds: string[];
   middleTurnIds: string[];
   exactSourceItemIds: string[];
   contextBlockIds: string[];
   discardedSourceItemIds: string[];
   estimatedTokens: number;
+  items: AssemblyReceiptItem[];
   createdAt: string;
 }
+
+export interface StoredAssemblyReceipt extends AssemblyReceipt {}
 
 export interface AssembledContextPacket {
   threadId: string;
@@ -209,12 +279,21 @@ export interface TranscriptStore {
   getContextBlock(
     contextBlockId: string,
   ): Promise<StoredContextBlock | undefined>;
+  getAssemblyReceipt(
+    assemblyId: string,
+  ): Promise<StoredAssemblyReceipt | undefined>;
   getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined>;
+  listThreadAssemblyReceipts(
+    threadId: string,
+  ): Promise<StoredAssemblyReceipt[]>;
   listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
+  listThreadRelationships(threadId: string): Promise<StoredRelationship[]>;
   getSourceItem(sourceItemId: string): Promise<StoredSourceItem | undefined>;
   listTurnSourceItems(turnId: string): Promise<StoredSourceItem[]>;
   listThreadSourceItems(threadId: string): Promise<StoredSourceItem[]>;
   listThreadTurns(threadId: string): Promise<StoredTranscriptTurn[]>;
+  refreshThreadSearchIndex(threadId: string): Promise<void>;
+  searchContext(input: SearchContextInput): Promise<SearchContextResult>;
   readTurnRaw(turnId: string): Promise<Uint8Array>;
   close(): Promise<void>;
 }
@@ -223,4 +302,5 @@ export interface CreateTranscriptStoreOptions {
   sqlitePath: string;
   blobDir: string;
   clock?: () => Date | string;
+  embeddingProvider?: EmbeddingProvider;
 }

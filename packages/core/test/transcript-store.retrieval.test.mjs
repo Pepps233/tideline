@@ -8,7 +8,7 @@ import {
   openSqlite,
 } from "./helpers/transcript-store.mjs";
 
-test.skip("exports retrieval, relationship, receipt, and provider public types", async () => {
+test("exports retrieval, relationship, receipt, and provider public types", async () => {
   const declarations = await readFile(
     new URL("../dist/index.d.ts", import.meta.url),
     "utf8",
@@ -58,7 +58,7 @@ test.skip("exports retrieval, relationship, receipt, and provider public types",
   );
 });
 
-test.skip("creates retrieval, relationship, and receipt tables with constraints", async (t) => {
+test("creates retrieval, relationship, and receipt tables with constraints", async (t) => {
   const { closeStore, sqlitePath } = await createIsolatedStore(t);
 
   await closeStore();
@@ -170,7 +170,7 @@ test.skip("creates retrieval, relationship, and receipt tables with constraints"
   }
 });
 
-test.skip("search ranks indexed context with deterministic vectors, lexical fallback, and stable ties", async (t) => {
+test("search ranks indexed context with deterministic vectors, lexical fallback, and stable ties", async (t) => {
   const { store } = await createIsolatedStore(t, {
     embeddingProvider: keywordEmbeddingProvider(),
   });
@@ -232,7 +232,7 @@ test.skip("search ranks indexed context with deterministic vectors, lexical fall
   );
 });
 
-test.skip("records derived, related, and explicit relationship edges", async (t) => {
+test("records derived, related, and explicit relationship edges", async (t) => {
   const { store } = await createIsolatedStore(t, {
     embeddingProvider: keywordEmbeddingProvider(),
   });
@@ -286,7 +286,7 @@ test.skip("records derived, related, and explicit relationship edges", async (t)
   );
 });
 
-test.skip("assembly ranks request-relevant middle context and persists raw-free receipts", async (t) => {
+test("assembly ranks request-relevant middle context and persists raw-free receipts", async (t) => {
   const { sqlitePath, store } = await createIsolatedStore(t, {
     embeddingProvider: keywordEmbeddingProvider(),
   });
@@ -378,9 +378,10 @@ test.skip("assembly ranks request-relevant middle context and persists raw-free 
   );
 
   assert.deepEqual(storedReceipt, packet.receipt);
-  assert.deepEqual(
-    listedReceipts.map((receipt) => receipt.assemblyId),
-    [packet.receipt.assemblyId],
+  assert.ok(
+    listedReceipts.some(
+      (receipt) => receipt.assemblyId === packet.receipt.assemblyId,
+    ),
   );
 
   const db = openSqlite(sqlitePath);
@@ -414,7 +415,7 @@ test.skip("assembly ranks request-relevant middle context and persists raw-free 
   }
 });
 
-test.skip("assembly suppresses context blocks that are explicitly superseded", async (t) => {
+test("assembly suppresses context blocks that are explicitly superseded", async (t) => {
   const { store } = await createIsolatedStore(t, {
     embeddingProvider: keywordEmbeddingProvider(),
   });

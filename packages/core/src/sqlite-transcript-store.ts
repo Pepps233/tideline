@@ -34,6 +34,14 @@ import {
   normalizeCaptureTurnEventInput,
 } from "./sqlite-transcript-store/capture-events.js";
 import { expandContextBlock as expandContextBlockFromStore } from "./sqlite-transcript-store/expansion.js";
+import {
+  createDefaultEmbeddingProvider,
+  getAssemblyReceipt as getAssemblyReceiptFromDb,
+  listThreadAssemblyReceipts as listThreadAssemblyReceiptsFromDb,
+  listThreadRelationships as listThreadRelationshipsFromDb,
+  refreshThreadSearchIndex as refreshThreadSearchIndexInDb,
+  searchContext as searchContextInDb,
+} from "./sqlite-transcript-store/retrieval.js";
 import type { AppendTurnInTransactionInput } from "./sqlite-transcript-store/capture-events.js";
 import type {
   AppendTranscriptTurnInput,
@@ -43,11 +51,16 @@ import type {
   CaptureTurnEventInput,
   CaptureTurnEventReceipt,
   CreateTranscriptStoreOptions,
+  EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
   RawBlobPointer,
+  SearchContextInput,
+  SearchContextResult,
   SourceLabel,
+  StoredAssemblyReceipt,
   StoredContextBlock,
+  StoredRelationship,
   StoredSourceItem,
   StoredTranscriptTurn,
   TranscriptStore,
@@ -70,11 +83,14 @@ class SqliteTranscriptStore implements TranscriptStore {
   private readonly blobDir: string;
   private readonly clock: () => Date | string;
   private readonly db: BetterSqlite3.Database;
+  private readonly embeddingProvider: EmbeddingProvider;
   private isClosed = false;
 
   constructor(options: CreateTranscriptStoreOptions) {
     this.blobDir = path.resolve(options.blobDir);
     this.clock = options.clock ?? (() => new Date());
+    this.embeddingProvider =
+      options.embeddingProvider ?? createDefaultEmbeddingProvider();
 
     mkdirSync(path.dirname(options.sqlitePath), { recursive: true });
     mkdirSync(this.blobDir, { recursive: true });
@@ -141,9 +157,12 @@ class SqliteTranscriptStore implements TranscriptStore {
     this.assertOpen();
 
     try {
+      await this.refreshThreadSearchIndex(input.threadId);
+
       return await assembleContextPacket({
         clock: this.clock,
         db: this.db,
+        embeddingProvider: this.embeddingProvider,
         readTurnRaw: (turnId) => this.readTurnRaw(turnId),
         request: input,
       });
@@ -195,6 +214,14 @@ class SqliteTranscriptStore implements TranscriptStore {
     return getContextBlockById(this.db, contextBlockId);
   }
 
+  async getAssemblyReceipt(
+    assemblyId: string,
+  ): Promise<StoredAssemblyReceipt | undefined> {
+    this.assertOpen();
+
+    return getAssemblyReceiptFromDb(this.db, assemblyId);
+  }
+
   async getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined> {
     this.assertOpen();
 
@@ -223,6 +250,22 @@ class SqliteTranscriptStore implements TranscriptStore {
     this.assertOpen();
 
     return listThreadContextBlocksInDb(this.db, threadId);
+  }
+
+  async listThreadAssemblyReceipts(
+    threadId: string,
+  ): Promise<StoredAssemblyReceipt[]> {
+    this.assertOpen();
+
+    return listThreadAssemblyReceiptsFromDb(this.db, threadId);
+  }
+
+  async listThreadRelationships(
+    threadId: string,
+  ): Promise<StoredRelationship[]> {
+    this.assertOpen();
+
+    return listThreadRelationshipsFromDb(this.db, threadId);
   }
 
   async getSourceItem(
@@ -330,6 +373,36 @@ class SqliteTranscriptStore implements TranscriptStore {
       .all(normalizedThreadId);
 
     return rows.map(mapTranscriptTurnRow);
+  }
+
+  async refreshThreadSearchIndex(threadId: string): Promise<void> {
+    this.assertOpen();
+
+    try {
+      await refreshThreadSearchIndexInDb({
+        clock: this.clock,
+        db: this.db,
+        embeddingProvider: this.embeddingProvider,
+        threadId,
+      });
+    } catch (error) {
+      throw normalizeSqliteError(error);
+    }
+  }
+
+  async searchContext(input: SearchContextInput): Promise<SearchContextResult> {
+    this.assertOpen();
+
+    try {
+      return await searchContextInDb({
+        clock: this.clock,
+        db: this.db,
+        embeddingProvider: this.embeddingProvider,
+        request: input,
+      });
+    } catch (error) {
+      throw normalizeSqliteError(error);
+    }
   }
 
   async readTurnRaw(turnId: string): Promise<Uint8Array> {

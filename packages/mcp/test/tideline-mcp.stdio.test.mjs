@@ -21,7 +21,7 @@ test("exports the MCP server factory", async () => {
   assert.match(declarations, /\bcreateTidelineMcpServer\b/);
 });
 
-test.skip("serves tools over stdio with text and structured content", async (t) => {
+test("serves tools over stdio with text and structured content", async (t) => {
   const fixture = await createMcpFixture(t);
   const client = await connectClient(t, {
     args: [

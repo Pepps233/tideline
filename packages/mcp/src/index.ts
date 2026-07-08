@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type {
   AssembleContextInput,
+  SearchContextInput,
   StoredTranscriptTurn,
   TranscriptStore,
 } from "@tideline/core";
@@ -199,6 +200,95 @@ function registerTools(server: McpServer, store: TranscriptStore): void {
 
         return toolResult(payload);
       }),
+  );
+
+  server.registerTool(
+    "search_context",
+    {
+      description: "Search indexed Tideline context for a thread.",
+      inputSchema: {
+        thread_id: z.string().min(1),
+        query: z.string().min(1),
+        limit: z.number().int().positive().optional(),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        await store.refreshThreadSearchIndex(input.thread_id);
+
+        const request: SearchContextInput = {
+          threadId: input.thread_id,
+          query: input.query,
+        };
+
+        if (input.limit !== undefined) {
+          request.limit = input.limit;
+        }
+
+        return toolResult(await store.searchContext(request));
+      }),
+  );
+
+  server.registerTool(
+    "list_relationships",
+    {
+      description: "List Tideline relationship edges for a thread.",
+      inputSchema: {
+        thread_id: z.string().min(1),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        await store.refreshThreadSearchIndex(input.thread_id);
+
+        const relationships = await store.listThreadRelationships(
+          input.thread_id,
+        );
+
+        return toolResult({
+          threadId: input.thread_id,
+          relationships,
+        });
+      }),
+  );
+
+  server.registerTool(
+    "get_assembly_receipt",
+    {
+      description: "Get a Tideline assembly receipt by ID.",
+      inputSchema: {
+        assembly_id: z.string().min(1),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        const receipt = await store.getAssemblyReceipt(input.assembly_id);
+
+        if (!receipt) {
+          return toolError(`Assembly receipt not found: ${input.assembly_id}`);
+        }
+
+        return toolResult(receipt);
+      }),
+  );
+
+  server.registerTool(
+    "list_assembly_receipts",
+    {
+      description: "List Tideline assembly receipts for a thread.",
+      inputSchema: {
+        thread_id: z.string().min(1),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () =>
+        toolResult({
+          threadId: input.thread_id,
+          assemblyReceipts: await store.listThreadAssemblyReceipts(
+            input.thread_id,
+          ),
+        }),
+      ),
   );
 }
 
