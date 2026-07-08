@@ -64,6 +64,69 @@ test("appends and lists ordered turns independently per thread", async (t) => {
   assert.equal(fetched.turnRole, "model");
 });
 
+test("lists session summaries by latest activity", async (t) => {
+  const { store } = await createIsolatedStore(t);
+
+  await store.captureTurnEvent({
+    eventId: "session-empty-start",
+    kind: "session_start",
+    threadId: "thread-empty",
+    createdAt: "2026-07-08T12:00:00.000Z",
+    payload: {},
+  });
+  await store.appendTurn({
+    threadId: "thread-old",
+    turnRole: "user",
+    raw: "Task: older session",
+    createdAt: "2026-07-08T12:01:00.000Z",
+  });
+  await store.appendTurn({
+    threadId: "thread-new",
+    turnRole: "user",
+    raw: "Task: newer session",
+    createdAt: "2026-07-08T12:02:00.000Z",
+  });
+  await store.captureTurnEvent({
+    eventId: "session-new-tool",
+    kind: "tool_result",
+    threadId: "thread-new",
+    createdAt: "2026-07-08T12:03:00.000Z",
+    payload: {
+      tool_name: "shell",
+      call_id: "call-new",
+      input: { command: "pnpm test" },
+      status: "success",
+      output: "pass",
+    },
+  });
+
+  const sessions = await store.listSessions();
+
+  assert.deepEqual(
+    sessions.map((session) => session.threadId),
+    ["thread-new", "thread-old", "thread-empty"],
+  );
+  assert.deepEqual(
+    sessions.map((session) => session.nextActiveTurn),
+    [2, 2, 1],
+  );
+  assert.equal(sessions[0].turnCount, 1);
+  assert.equal(sessions[0].pendingToolEventCount, 1);
+  assert.equal(sessions[0].latestActivityAt, "2026-07-08T12:03:00.000Z");
+  assert.equal(sessions[2].turnCount, 0);
+  assert.equal(sessions[2].processedEventCount, 1);
+
+  assert.deepEqual(
+    (await store.listSessions({ limit: 2 })).map((session) => session.threadId),
+    ["thread-new", "thread-old"],
+  );
+
+  await assert.rejects(
+    async () => await store.listSessions({ limit: 0 }),
+    /limit|positive|integer/i,
+  );
+});
+
 test("configures SQLite WAL mode and raw pointer foreign keys", async (t) => {
   const { sqlitePath, store } = await createIsolatedStore(t);
   await store.appendTurn({

@@ -54,6 +54,7 @@ import type {
   EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
+  ListSessionsInput,
   RawBlobPointer,
   SearchContextInput,
   SearchContextResult,
@@ -61,6 +62,7 @@ import type {
   StoredAssemblyReceipt,
   StoredContextBlock,
   StoredRelationship,
+  StoredSessionSummary,
   StoredSourceItem,
   StoredTranscriptTurn,
   TranscriptStore,
@@ -77,6 +79,18 @@ export async function createTranscriptStore(
   options: CreateTranscriptStoreOptions,
 ): Promise<TranscriptStore> {
   return new SqliteTranscriptStore(options);
+}
+
+interface SessionSummaryRow {
+  thread_id: string;
+  turn_count: number;
+  latest_turn_index: number;
+  context_block_count: number;
+  assembly_receipt_count: number;
+  processed_event_count: number;
+  pending_tool_event_count: number;
+  first_activity_at: string;
+  latest_activity_at: string;
 }
 
 class SqliteTranscriptStore implements TranscriptStore {
@@ -266,6 +280,103 @@ class SqliteTranscriptStore implements TranscriptStore {
     this.assertOpen();
 
     return listThreadRelationshipsFromDb(this.db, threadId);
+  }
+
+  async listSessions(
+    input: ListSessionsInput = {},
+  ): Promise<StoredSessionSummary[]> {
+    this.assertOpen();
+
+    const limit = normalizeSessionListLimit(input.limit);
+    const limitClause = limit === undefined ? "" : "LIMIT ?";
+    const rows = this.db
+      .prepare<[number?], SessionSummaryRow>(
+        `WITH activity AS (
+          SELECT thread_id, created_at FROM transcript_turns
+          UNION ALL
+          SELECT thread_id, created_at FROM context_blocks
+          UNION ALL
+          SELECT thread_id, created_at FROM assembly_receipts
+          UNION ALL
+          SELECT thread_id, created_at FROM hook_processed_events
+          UNION ALL
+          SELECT thread_id, created_at FROM hook_pending_tool_events
+        ),
+        activity_stats AS (
+          SELECT
+            thread_id,
+            MIN(created_at) AS first_activity_at,
+            MAX(created_at) AS latest_activity_at
+          FROM activity
+          GROUP BY thread_id
+        ),
+        turn_stats AS (
+          SELECT
+            thread_id,
+            COUNT(*) AS turn_count,
+            MAX(turn_index) AS latest_turn_index
+          FROM transcript_turns
+          GROUP BY thread_id
+        ),
+        context_block_stats AS (
+          SELECT thread_id, COUNT(*) AS context_block_count
+          FROM context_blocks
+          GROUP BY thread_id
+        ),
+        assembly_receipt_stats AS (
+          SELECT thread_id, COUNT(*) AS assembly_receipt_count
+          FROM assembly_receipts
+          GROUP BY thread_id
+        ),
+        processed_event_stats AS (
+          SELECT thread_id, COUNT(*) AS processed_event_count
+          FROM hook_processed_events
+          GROUP BY thread_id
+        ),
+        pending_tool_event_stats AS (
+          SELECT thread_id, COUNT(*) AS pending_tool_event_count
+          FROM hook_pending_tool_events
+          GROUP BY thread_id
+        )
+        SELECT
+          activity_stats.thread_id,
+          COALESCE(turn_stats.turn_count, 0) AS turn_count,
+          COALESCE(turn_stats.latest_turn_index, 0) AS latest_turn_index,
+          COALESCE(
+            context_block_stats.context_block_count,
+            0
+          ) AS context_block_count,
+          COALESCE(
+            assembly_receipt_stats.assembly_receipt_count,
+            0
+          ) AS assembly_receipt_count,
+          COALESCE(
+            processed_event_stats.processed_event_count,
+            0
+          ) AS processed_event_count,
+          COALESCE(
+            pending_tool_event_stats.pending_tool_event_count,
+            0
+          ) AS pending_tool_event_count,
+          activity_stats.first_activity_at,
+          activity_stats.latest_activity_at
+        FROM activity_stats
+        LEFT JOIN turn_stats
+          ON turn_stats.thread_id = activity_stats.thread_id
+        LEFT JOIN context_block_stats
+          ON context_block_stats.thread_id = activity_stats.thread_id
+        LEFT JOIN assembly_receipt_stats
+          ON assembly_receipt_stats.thread_id = activity_stats.thread_id
+        LEFT JOIN processed_event_stats
+          ON processed_event_stats.thread_id = activity_stats.thread_id
+        LEFT JOIN pending_tool_event_stats
+          ON pending_tool_event_stats.thread_id = activity_stats.thread_id
+        ORDER BY activity_stats.latest_activity_at DESC, activity_stats.thread_id ASC
+        ${limitClause}`,
+      )
+      .all(...(limit === undefined ? [] : [limit]));
+
+    return rows.map(mapSessionSummaryRow);
   }
 
   async getSourceItem(
@@ -773,4 +884,33 @@ class SqliteTranscriptStore implements TranscriptStore {
       throw new Error("Transcript store is closed");
     }
   }
+}
+
+function normalizeSessionListLimit(
+  limit: number | undefined,
+): number | undefined {
+  if (limit === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("limit must be a positive integer");
+  }
+
+  return limit;
+}
+
+function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionSummary {
+  return {
+    threadId: row.thread_id,
+    turnCount: row.turn_count,
+    latestTurnIndex: row.latest_turn_index,
+    nextActiveTurn: row.latest_turn_index + 1,
+    contextBlockCount: row.context_block_count,
+    assemblyReceiptCount: row.assembly_receipt_count,
+    processedEventCount: row.processed_event_count,
+    pendingToolEventCount: row.pending_tool_event_count,
+    firstActivityAt: row.first_activity_at,
+    latestActivityAt: row.latest_activity_at,
+  };
 }

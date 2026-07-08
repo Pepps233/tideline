@@ -154,6 +154,23 @@ export interface SearchContextInput {
   limit?: number;
 }
 
+export interface ListSessionsInput {
+  limit?: number;
+}
+
+export interface StoredSessionSummary {
+  threadId: string;
+  turnCount: number;
+  latestTurnIndex: number;
+  nextActiveTurn: number;
+  contextBlockCount: number;
+  assemblyReceiptCount: number;
+  processedEventCount: number;
+  pendingToolEventCount: number;
+  firstActivityAt: string;
+  latestActivityAt: string;
+}
+
 export type SearchContextEntityType = RelationshipEntityType;
 
 export type SearchContextTextKind =
@@ -289,6 +306,7 @@ export interface TranscriptStore {
   listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
   listThreadRelationships(threadId: string): Promise<StoredRelationship[]>;
   getSourceItem(sourceItemId: string): Promise<StoredSourceItem | undefined>;
+  listSessions(input?: ListSessionsInput): Promise<StoredSessionSummary[]>;
   listTurnSourceItems(turnId: string): Promise<StoredSourceItem[]>;
   listThreadSourceItems(threadId: string): Promise<StoredSourceItem[]>;
   listThreadTurns(threadId: string): Promise<StoredTranscriptTurn[]>;

@@ -42,9 +42,25 @@ test("serves tools over stdio with text and structured content", async (t) => {
     "list_assembly_receipts",
     "list_context_blocks",
     "list_relationships",
+    "list_sessions",
     "list_thread_turns",
     "search_context",
   ]);
+
+  const sessions = await client.callTool({
+    name: "list_sessions",
+    arguments: {},
+  });
+
+  assert.deepEqual(
+    sessions.structuredContent.sessions.map((session) => session.threadId),
+    [fixture.threadId],
+  );
+  assert.equal(sessions.structuredContent.sessions[0].turnCount, 6);
+  assert.equal(
+    sessions.structuredContent.sessions[0].nextActiveTurn,
+    fixture.turns.length + 1,
+  );
 
   const turns = await client.callTool({
     name: "list_thread_turns",
@@ -181,6 +197,13 @@ test("serves registered resources over stdio", async (t) => {
   const timeline = await client.readResource({
     uri: `memory://session/${fixture.threadId}/timeline`,
   });
+
+  const sessions = await client.readResource({
+    uri: "memory://sessions",
+  });
+
+  assertResourceText(sessions, fixture.threadId);
+  assertResourceText(sessions, "nextActiveTurn");
 
   assertResourceText(timeline, fixture.threadId);
   assertResourceText(timeline, fixture.block.contextBlockId);

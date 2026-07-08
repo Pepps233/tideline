@@ -29,6 +29,10 @@ interface ContextBlocksPayload {
   >;
 }
 
+interface SessionsPayload {
+  sessions: Awaited<ReturnType<TranscriptStore["listSessions"]>>;
+}
+
 interface TurnMetadata {
   turnId: string;
   threadId: string;
@@ -65,6 +69,27 @@ export function createTidelineMcpServer(
 }
 
 function registerTools(server: McpServer, store: TranscriptStore): void {
+  server.registerTool(
+    "list_sessions",
+    {
+      description:
+        "List discoverable Tideline sessions ordered by latest activity.",
+      inputSchema: {
+        limit: z.number().int().positive().optional(),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        const payload: SessionsPayload = {
+          sessions: await store.listSessions(
+            input.limit === undefined ? undefined : { limit: input.limit },
+          ),
+        };
+
+        return toolResult(payload);
+      }),
+  );
+
   server.registerTool(
     "assemble_context",
     {
@@ -293,6 +318,24 @@ function registerTools(server: McpServer, store: TranscriptStore): void {
 }
 
 function registerResources(server: McpServer, store: TranscriptStore): void {
+  server.registerResource(
+    "sessions",
+    "memory://sessions",
+    {
+      title: "Tideline sessions",
+      description:
+        "Tideline session summaries ordered by latest activity for discovery.",
+      mimeType: "application/json",
+    },
+    async (uri) => {
+      const payload: SessionsPayload = {
+        sessions: await store.listSessions(),
+      };
+
+      return resourceResult(uri.href, payload);
+    },
+  );
+
   server.registerResource(
     "session-timeline",
     new ResourceTemplate("memory://session/{session_id}/timeline", {
