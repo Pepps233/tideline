@@ -6,8 +6,8 @@ Tideline is an external context assembly layer for coding agents.
 It is intended to sit beside an agent runtime and maintain the working context that the agent sees over a long session.
 The project is seeded as a TypeScript monorepo for a self-host stack built around Node.js, Fastify, the MCP SDK, PostgreSQL with pgvector, MinIO, Valkey, BullMQ, Zod, Kysely, and Next.js.
 
-This repository currently contains scaffold, documentation, and workspace configuration only.
-Runtime services, schemas, migrations, Docker services, and production implementation are planned but are not included in this seed.
+The repository now includes a SQLite-backed core transcript store, a read-only MCP server, and a generic hook capture CLI.
+Runtime service packages, PostgreSQL schemas, migrations, Docker services, and durable memory layers remain outside this initial implementation.
 
 ## Why Tideline
 
@@ -43,6 +43,17 @@ Durable memory is planned as a later layer for stable project facts, preferences
 
 The seed focuses on the repository shape needed for session context assembly.
 Durable memory is intentionally deferred so the initial architecture can keep source items, context blocks, receipts, and expansion behavior clear.
+
+## Workspace Packages
+
+`@tideline/core` owns the transcript store, raw blob persistence, source item splitting, context block construction, expansion, assembly, and hook capture transactions.
+It keeps transcript roles normalized to `user` and `model`.
+
+`@tideline/hooks` provides the `tideline-hook` CLI.
+The CLI reads one JSON event from stdin, writes one JSON receipt to stdout, and stores captured turns through `@tideline/core`.
+
+`@tideline/mcp` exposes the read surface for agents.
+It lists turns and context blocks, expands context blocks, and assembles sliding context without adding capture tools.
 
 ## Intended Self-Host Flow
 

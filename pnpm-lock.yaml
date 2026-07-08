@@ -41,6 +41,16 @@ importers:
         specifier: ^22.20.0
         version: 22.20.0
 
+  packages/hooks:
+    dependencies:
+      '@tideline/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.20.0
+        version: 22.20.0
+
   packages/mcp:
     dependencies:
       '@modelcontextprotocol/sdk':
