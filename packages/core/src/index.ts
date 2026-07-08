@@ -2,6 +2,8 @@ import type {
   AssembleContextInput,
   AssembledContextPacket,
   BuildContextBlocksInput as CoreBuildContextBlocksInput,
+  ExpandContextBlockInput,
+  ExpandedContextBlock,
   StoredContextBlock as CoreStoredContextBlock,
   TranscriptStore as CoreTranscriptStore,
 } from "./types.js";
@@ -16,6 +18,9 @@ export type {
   AssemblyReceipt,
   ContextAction,
   CreateTranscriptStoreOptions,
+  ExpandContextBlockInput,
+  ExpandedContextBlock,
+  ExpandedContextBlockSource,
   RawBlobPointer,
   SourceLabel,
   StoredSourceItem,
@@ -32,6 +37,9 @@ export interface TranscriptStore extends CoreTranscriptStore {
   buildContextBlocks(
     input: BuildContextBlocksInput,
   ): Promise<StoredContextBlock[]>;
+  expandContextBlock(
+    input: ExpandContextBlockInput,
+  ): Promise<ExpandedContextBlock | undefined>;
   getContextBlock(
     contextBlockId: string,
   ): Promise<StoredContextBlock | undefined>;
