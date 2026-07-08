@@ -47,7 +47,7 @@ export function chooseContextAction(input: {
 
   const exactReason = exactActionReason(input.labels);
 
-  if (exactReason) {
+  if (exactReason && !isIncidentalExactValue(input.labels, exactReason)) {
     return {
       contextAction: "preserve_exact",
       actionReason: exactReason,
@@ -106,4 +106,16 @@ function exactActionReason(labels: SourceLabel[]): string | undefined {
   }
 
   return undefined;
+}
+
+function isIncidentalExactValue(
+  labels: SourceLabel[],
+  exactReason: string,
+): boolean {
+  return (
+    exactReason === "preserve_exact:exact_value" &&
+    (labels.includes("reasoning") ||
+      labels.includes("exploration") ||
+      labels.includes("task_state"))
+  );
 }

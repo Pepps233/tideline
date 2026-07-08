@@ -91,6 +91,11 @@ export interface AssembleContextInput {
   scope?: string;
 }
 
+export interface ExpandContextBlockInput {
+  contextBlockId: string;
+  tokenBudget?: number;
+}
+
 export type AssembledContextSectionKind =
   | "full_transcript_anchors"
   | "recent_full_transcript"
@@ -140,12 +145,35 @@ export interface AssembledContextPacket {
   receipt: AssemblyReceipt;
 }
 
+export interface ExpandedContextBlockSource {
+  sourceItem: StoredSourceItem;
+  turn: StoredTranscriptTurn;
+  mediaType: string;
+  rawByteLength: number;
+  excerpt: string;
+  excerptStartByteOffset: number | null;
+  excerptEndByteOffset: number | null;
+  truncated: boolean;
+  usedRenderedExcerpt: boolean;
+}
+
+export interface ExpandedContextBlock {
+  contextBlock: StoredContextBlock;
+  sources: ExpandedContextBlockSource[];
+  tokenBudget: number;
+  estimatedTokens: number;
+  truncated: boolean;
+}
+
 export interface TranscriptStore {
   appendTurn(input: AppendTranscriptTurnInput): Promise<StoredTranscriptTurn>;
   assembleContext(input: AssembleContextInput): Promise<AssembledContextPacket>;
   buildContextBlocks(
     input: BuildContextBlocksInput,
   ): Promise<StoredContextBlock[]>;
+  expandContextBlock(
+    input: ExpandContextBlockInput,
+  ): Promise<ExpandedContextBlock | undefined>;
   getContextBlock(
     contextBlockId: string,
   ): Promise<StoredContextBlock | undefined>;
