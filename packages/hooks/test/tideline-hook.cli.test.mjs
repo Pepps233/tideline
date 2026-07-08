@@ -209,6 +209,126 @@ test("returns the original receipt for duplicate event ids", async (t) => {
   }
 });
 
+test("captured CLI sessions assemble searchable relationship-backed receipts", async (t) => {
+  const fixture = await createHookFixture(t);
+  const threadId = "thread-cli-retrieval";
+  const storageEnv = {
+    TIDELINE_SQLITE_PATH: fixture.sqlitePath,
+    TIDELINE_BLOB_DIR: fixture.blobDir,
+  };
+  const events = [
+    {
+      event_id: "cli-retrieval-prompt-1",
+      kind: "prompt_submit",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:00.000Z",
+      payload: { prompt: "Task: Anchor the hook retrieval session." },
+    },
+    {
+      event_id: "cli-retrieval-model-1",
+      kind: "model_response_complete",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:01.000Z",
+      payload: { response: "Decision: Use hook CLI capture." },
+    },
+    {
+      event_id: "cli-retrieval-prompt-2",
+      kind: "prompt_submit",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:02.000Z",
+      payload: { prompt: "Rules:\n- Keep receipt rows raw-free." },
+    },
+    {
+      event_id: "cli-retrieval-model-2",
+      kind: "model_response_complete",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:03.000Z",
+      payload: {
+        response:
+          "I inspected hook storage retrieval because captured context remains in progress.",
+      },
+    },
+    {
+      event_id: "cli-retrieval-prompt-3",
+      kind: "prompt_submit",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:04.000Z",
+      payload: { prompt: "Task: Middle user turn before recent model." },
+    },
+    {
+      event_id: "cli-retrieval-model-3",
+      kind: "model_response_complete",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:05.000Z",
+      payload: {
+        response:
+          "I inspected recent hook model because this should stay recent.",
+      },
+    },
+    {
+      event_id: "cli-retrieval-prompt-4",
+      kind: "prompt_submit",
+      thread_id: threadId,
+      created_at: "2026-07-08T13:05:06.000Z",
+      payload: { prompt: "Task: Assemble hook retrieval context." },
+    },
+  ];
+
+  for (const event of events) {
+    const result = await runHookCli({
+      env: storageEnv,
+      input: JSON.stringify(event),
+    });
+
+    assert.equal(result.exit.code, 0, result.stderr);
+  }
+
+  const store = await createTranscriptStore({
+    sqlitePath: fixture.sqlitePath,
+    blobDir: fixture.blobDir,
+  });
+
+  try {
+    await store.refreshThreadSearchIndex(threadId);
+
+    const search = await store.searchContext({
+      threadId,
+      query: "hook storage retrieval captured context",
+      limit: 3,
+    });
+
+    assert.equal(search.results[0].entityType, "context_block");
+    assert.match(search.results[0].preview, /hook storage retrieval/i);
+
+    const relationships = await store.listThreadRelationships(threadId);
+
+    assert.ok(
+      relationships.some(
+        (relationship) => relationship.relationshipType === "derived_from",
+      ),
+    );
+
+    const packet = await store.assembleContext({
+      threadId,
+      activeTurn: 7,
+      task: "Continue hook storage retrieval",
+      tokenBudget: 5000,
+    });
+
+    assert.equal(packet.receipt.status, "assembled");
+    assert.equal(packet.receipt.contextBlockIds.length, 1);
+
+    const receipts = await store.listThreadAssemblyReceipts(threadId);
+
+    assert.deepEqual(
+      receipts.map((assemblyReceipt) => assemblyReceipt.assemblyId),
+      [packet.receipt.assemblyId],
+    );
+  } finally {
+    await store.close();
+  }
+});
+
 async function createHookFixture(t) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "tideline-hooks-"));
   const fixture = {

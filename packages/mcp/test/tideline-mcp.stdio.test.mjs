@@ -38,9 +38,13 @@ test("serves tools over stdio with text and structured content", async (t) => {
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
     "assemble_context",
     "expand_context_block",
+    "get_assembly_receipt",
     "get_context_block",
+    "list_assembly_receipts",
     "list_context_blocks",
+    "list_relationships",
     "list_thread_turns",
+    "search_context",
   ]);
 
   const turns = await client.callTool({
@@ -83,9 +87,65 @@ test("serves tools over stdio with text and structured content", async (t) => {
 
   assertTextContent(assembled, fixture.block.summary);
   assert.equal(assembled.structuredContent.threadId, fixture.threadId);
+  assert.equal(assembled.structuredContent.receipt.status, "assembled");
+  assert.ok(Array.isArray(assembled.structuredContent.receipt.items));
   assert.deepEqual(assembled.structuredContent.receipt.contextBlockIds, [
     fixture.block.contextBlockId,
   ]);
+
+  const search = await client.callTool({
+    name: "search_context",
+    arguments: {
+      thread_id: fixture.threadId,
+      query: "recover exact source spans",
+      limit: 3,
+    },
+  });
+
+  assert.equal(search.structuredContent.threadId, fixture.threadId);
+  assert.equal(search.structuredContent.results[0].entityType, "context_block");
+  assert.equal(
+    search.structuredContent.results[0].entityId,
+    fixture.block.contextBlockId,
+  );
+
+  const relationships = await client.callTool({
+    name: "list_relationships",
+    arguments: { thread_id: fixture.threadId },
+  });
+
+  assert.ok(
+    relationships.structuredContent.relationships.some(
+      (relationship) =>
+        relationship.relationshipType === "derived_from" &&
+        relationship.fromEntityId === fixture.block.contextBlockId &&
+        relationship.toEntityId === fixture.item.sourceItemId,
+    ),
+  );
+
+  const receipt = await client.callTool({
+    name: "get_assembly_receipt",
+    arguments: {
+      assembly_id: assembled.structuredContent.receipt.assemblyId,
+    },
+  });
+
+  assert.deepEqual(
+    receipt.structuredContent,
+    assembled.structuredContent.receipt,
+  );
+
+  const receipts = await client.callTool({
+    name: "list_assembly_receipts",
+    arguments: { thread_id: fixture.threadId },
+  });
+
+  assert.deepEqual(
+    receipts.structuredContent.assemblyReceipts.map(
+      (assemblyReceipt) => assemblyReceipt.assemblyId,
+    ),
+    [assembled.structuredContent.receipt.assemblyId],
+  );
 
   const expanded = await client.callTool({
     name: "expand_context_block",
