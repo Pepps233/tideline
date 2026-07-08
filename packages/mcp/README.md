@@ -1,6 +1,7 @@
 # MCP Package
 
-This package is reserved for future MCP tools, resources, and transport setup.
-It will eventually define how coding agents interact with Tideline through the Model Context Protocol.
+This package implements the read-only Model Context Protocol surface for Tideline.
+It exposes tools for assembling context, listing thread turns, listing context blocks, fetching context blocks, and expanding compacted context.
 
-No MCP implementation is included in this scaffold.
+Capture remains outside MCP.
+Agents write session events through the `@tideline/hooks` CLI or the reusable `@tideline/core` capture API.
