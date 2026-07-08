@@ -13,11 +13,15 @@ export function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-export async function createIsolatedStore(t) {
+export async function createIsolatedStore(t, options = {}) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "tideline-core-"));
   const sqlitePath = path.join(tempDir, "store.sqlite");
   const blobDir = path.join(tempDir, "blobs");
-  const store = await createTranscriptStore({ sqlitePath, blobDir });
+  const store = await createTranscriptStore({
+    sqlitePath,
+    blobDir,
+    ...options,
+  });
   let isClosed = false;
   const closeStore = async () => {
     if (!isClosed) {
