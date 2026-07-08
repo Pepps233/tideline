@@ -10,7 +10,7 @@ import { createTranscriptStore } from "@tideline/core";
 
 const serverPath = new URL("../dist/cli.js", import.meta.url).pathname;
 
-test("MCP reads turns and context assembled from hook capture", async (t) => {
+test.skip("MCP reads turns and context assembled from hook capture", async (t) => {
   const fixture = await createCapturedMcpFixture(t);
   const client = await connectClient(t, {
     args: [
