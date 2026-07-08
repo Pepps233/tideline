@@ -6,6 +6,7 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
+    "tideline-codex-hook": "./dist/codex-hook-adapter.js",
     "tideline-hook": "./dist/cli.js"
   },
   "exports": {

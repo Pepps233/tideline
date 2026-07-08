@@ -1,0 +1,28 @@
+{
+  "name": "tideline-codex",
+  "version": "0.1.0",
+  "description": "Connect Codex to Tideline context capture and MCP retrieval.",
+  "author": {
+    "name": "Tideline"
+  },
+  "homepage": "https://github.com/Pepps233/tideline",
+  "repository": "https://github.com/Pepps233/tideline",
+  "license": "Apache-2.0",
+  "keywords": ["codex", "context", "hooks", "mcp", "memory", "tideline"],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Tideline",
+    "shortDescription": "Persist Codex session context for Tideline retrieval",
+    "longDescription": "Install Tideline MCP and hook wiring so Codex can capture prompts, tool results, and turn summaries in local Tideline storage.",
+    "developerName": "Tideline",
+    "category": "Developer Tools",
+    "capabilities": ["Read", "Write"],
+    "websiteURL": "https://github.com/Pepps233/tideline",
+    "privacyPolicyURL": "https://github.com/Pepps233/tideline",
+    "termsOfServiceURL": "https://github.com/Pepps233/tideline",
+    "defaultPrompt": ["Use Tideline context for this session"],
+    "brandColor": "#0F766E",
+    "screenshots": []
+  }
+}
