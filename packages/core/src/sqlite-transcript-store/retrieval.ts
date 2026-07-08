@@ -4,19 +4,9 @@ import type BetterSqlite3 from "better-sqlite3";
 
 import { normalizeSourceLabel } from "../source-items/labels.js";
 import type {
-  AssemblyReceipt,
-  AssemblyReceiptItem,
-  EmbeddingProvider,
-  RelationshipEntityType,
-  RelationshipType,
-  SearchContextInput,
-  SearchContextResult,
-  SearchContextResultItem,
-  SearchContextTextKind,
+  AssembledContextSectionKind,
   SourceLabel,
-  StoredAssemblyReceipt,
   StoredContextBlock,
-  StoredRelationship,
   StoredSourceItem,
 } from "../types.js";
 import {
@@ -31,6 +21,87 @@ interface SourceItemWithTurn extends StoredSourceItem {
   threadId: string;
   turnIndex: number;
 }
+
+export interface EmbeddingProvider {
+  name: string;
+  dimensions: number;
+  embed(texts: string[]): Promise<number[][]>;
+}
+
+export type RelationshipType =
+  "derived_from" | "same_topic_as" | "refines" | "supersedes" | "resolved_by";
+
+export type RelationshipEntityType = "context_block" | "source_item";
+
+export interface StoredRelationship {
+  relationshipId: string;
+  threadId: string;
+  relationshipType: RelationshipType;
+  fromEntityType: RelationshipEntityType;
+  fromEntityId: string;
+  toEntityType: RelationshipEntityType;
+  toEntityId: string;
+  reason: string;
+  createdAt: string;
+}
+
+export interface SearchContextInput {
+  threadId: string;
+  query: string;
+  limit?: number;
+}
+
+export type SearchContextTextKind =
+  | "context_block_summary"
+  | "source_item_exact"
+  | "source_item_uncovered_compact";
+
+export interface SearchContextResultItem {
+  entityType: RelationshipEntityType;
+  entityId: string;
+  textKind: SearchContextTextKind;
+  preview: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface SearchContextResult {
+  threadId: string;
+  query: string;
+  results: SearchContextResultItem[];
+}
+
+export type AssemblyReceiptEntityType =
+  "turn" | "source_item" | "context_block";
+
+export interface AssemblyReceiptItem {
+  itemIndex: number;
+  entityType: AssemblyReceiptEntityType;
+  entityId: string;
+  sectionKind: AssembledContextSectionKind;
+  included: boolean;
+  estimatedTokens: number;
+  score: number;
+  reasons: string[];
+  omitReason?: string | undefined;
+}
+
+export interface AssemblyReceipt {
+  assemblyId: string;
+  threadId: string;
+  activeTurn: number;
+  status: "assembled";
+  includedFullTurnIds: string[];
+  middleTurnIds: string[];
+  exactSourceItemIds: string[];
+  contextBlockIds: string[];
+  discardedSourceItemIds: string[];
+  estimatedTokens: number;
+  items: AssemblyReceiptItem[];
+  createdAt: string;
+}
+
+export interface StoredAssemblyReceipt extends AssemblyReceipt {}
 
 interface SourceItemWithTurnRow {
   source_item_id: string;
@@ -1138,7 +1209,7 @@ function compareEntityType(
     source_item: 1,
   };
 
-  return order[left] - order[right];
+  return (order[left] ?? 0) - (order[right] ?? 0);
 }
 
 function createPreview(text: string): string {
