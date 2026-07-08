@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -77,6 +77,47 @@ test("uses env storage and thread fallbacks", async (t) => {
   assert.equal(receipt.threadId, "thread-cli-env");
 });
 
+test("uses default storage under the home directory", async (t) => {
+  const homeDir = await mkdtemp(path.join(tmpdir(), "tideline-hook-home-"));
+  const sqlitePath = path.join(homeDir, ".tideline", "tideline.sqlite");
+  const blobDir = path.join(homeDir, ".tideline", "blobs");
+  const event = {
+    event_id: "cli-default-prompt",
+    kind: "prompt_submit",
+    created_at: "2026-07-08T13:01:30.000Z",
+    payload: {
+      prompt: "Task: Capture from hook CLI default storage.",
+    },
+  };
+
+  t.after(async () => {
+    await rm(homeDir, { force: true, recursive: true });
+  });
+
+  const result = await runHookCli({
+    env: {
+      HOME: homeDir,
+      TIDELINE_THREAD_ID: "thread-cli-default",
+    },
+    input: JSON.stringify(event),
+  });
+
+  assert.equal(result.exit.code, 0, result.stderr);
+  assert.equal((await stat(path.dirname(sqlitePath))).isDirectory(), true);
+  assert.equal((await stat(blobDir)).isDirectory(), true);
+
+  const store = await createTranscriptStore({ sqlitePath, blobDir });
+
+  try {
+    const turns = await store.listThreadTurns("thread-cli-default");
+
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].turnRole, "user");
+  } finally {
+    await store.close();
+  }
+});
+
 test("rejects mismatched event and configured thread ids", async (t) => {
   const fixture = await createHookFixture(t);
   const result = await runHookCli({
@@ -107,7 +148,7 @@ test("rejects mismatched event and configured thread ids", async (t) => {
   assert.equal(result.stdout, "");
 });
 
-test("fails for invalid input and storage configuration errors", async (t) => {
+test("fails for invalid input and thread configuration errors", async (t) => {
   const fixture = await createHookFixture(t);
   const invalidJson = await runHookCli({
     args: [
@@ -153,21 +194,18 @@ test("fails for invalid input and storage configuration errors", async (t) => {
   assert.notEqual(multipleEvents.exit.code, 0);
   assert.match(multipleEvents.stderr, /one JSON event|single JSON event/i);
 
-  const missingStorage = await runHookCli({
-    env: {
-      TIDELINE_THREAD_ID: "thread-cli-invalid",
-    },
+  const missingThread = await runHookCli({
     input: JSON.stringify({
-      event_id: "cli-missing-storage",
+      event_id: "cli-missing-thread",
       kind: "session_start",
       created_at: "2026-07-08T13:03:02.000Z",
       payload: {},
     }),
   });
 
-  assert.notEqual(missingStorage.exit.code, 0);
-  assert.match(missingStorage.stderr, /--sqlite-path|TIDELINE_SQLITE_PATH/i);
-  assert.match(missingStorage.stderr, /--blob-dir|TIDELINE_BLOB_DIR/i);
+  assert.notEqual(missingThread.exit.code, 0);
+  assert.match(missingThread.stderr, /Thread ID|required/i);
+  assert.equal(missingThread.stdout, "");
 });
 
 test("returns the original receipt for duplicate event ids", async (t) => {
@@ -375,6 +413,7 @@ function cleanHookEnv() {
 
   delete env.TIDELINE_SQLITE_PATH;
   delete env.TIDELINE_BLOB_DIR;
+  delete env.TIDELINE_HOME;
   delete env.TIDELINE_THREAD_ID;
   return env;
 }

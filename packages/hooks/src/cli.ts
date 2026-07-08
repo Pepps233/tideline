@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-import { createTranscriptStore } from "@tideline/core";
+import {
+  createTranscriptStore,
+  resolveTidelineStorageConfig,
+} from "@tideline/core";
 import type {
   CaptureTurnEventInput,
   CaptureTurnEventKind,
@@ -104,14 +107,11 @@ function resolveConfig(
   env: NodeJS.ProcessEnv,
   event: Record<string, unknown>,
 ): HookConfig {
-  const sqlitePath = args.sqlitePath ?? env.TIDELINE_SQLITE_PATH;
-  const blobDir = args.blobDir ?? env.TIDELINE_BLOB_DIR;
-
-  if (!sqlitePath || !blobDir) {
-    throw new Error(
-      "Storage configuration is required. Provide --sqlite-path or TIDELINE_SQLITE_PATH and --blob-dir or TIDELINE_BLOB_DIR.",
-    );
-  }
+  const storageConfig = resolveTidelineStorageConfig({
+    blobDir: args.blobDir,
+    env,
+    sqlitePath: args.sqlitePath,
+  });
 
   const eventThreadId = optionalStringField(event, "thread_id");
   const envThreadId = env.TIDELINE_THREAD_ID;
@@ -141,7 +141,7 @@ function resolveConfig(
     );
   }
 
-  const config: HookConfig = { sqlitePath, blobDir };
+  const config: HookConfig = storageConfig;
 
   if (threadId !== undefined) {
     config.threadId = threadId;
