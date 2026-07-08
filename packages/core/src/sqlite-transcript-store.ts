@@ -28,8 +28,11 @@ import {
   getContextBlockById,
   listThreadContextBlocks as listThreadContextBlocksInDb,
 } from "./sqlite-transcript-store/context-blocks.js";
+import { assembleContext as assembleContextPacket } from "./sqlite-transcript-store/assembly.js";
 import type {
   AppendTranscriptTurnInput,
+  AssembleContextInput,
+  AssembledContextPacket,
   BuildContextBlocksInput,
   CreateTranscriptStoreOptions,
   RawBlobPointer,
@@ -146,6 +149,23 @@ class SqliteTranscriptStore implements TranscriptStore {
 
     try {
       return appendTurnTransaction.immediate();
+    } catch (error) {
+      throw normalizeSqliteError(error);
+    }
+  }
+
+  async assembleContext(
+    input: AssembleContextInput,
+  ): Promise<AssembledContextPacket> {
+    this.assertOpen();
+
+    try {
+      return await assembleContextPacket({
+        clock: this.clock,
+        db: this.db,
+        readTurnRaw: (turnId) => this.readTurnRaw(turnId),
+        request: input,
+      });
     } catch (error) {
       throw normalizeSqliteError(error);
     }

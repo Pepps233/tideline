@@ -83,8 +83,66 @@ export interface BuildContextBlocksInput {
   createdAt?: Date | string;
 }
 
+export interface AssembleContextInput {
+  threadId: string;
+  activeTurn: number;
+  tokenBudget?: number;
+  task?: string;
+  scope?: string;
+}
+
+export type AssembledContextSectionKind =
+  | "full_transcript_anchors"
+  | "recent_full_transcript"
+  | "exact_source_items"
+  | "compacted_context_blocks"
+  | "open_questions"
+  | "expandable_sources";
+
+export type AssembledContextItemSourceType =
+  "turn" | "source_item" | "context_block";
+
+export interface AssembledContextItem {
+  id: string;
+  sourceType: AssembledContextItemSourceType;
+  text: string;
+  reason: string;
+  labels?: SourceLabel[];
+  turnId?: string;
+  turnIndex?: number;
+  sourceItemIds?: string[];
+  contextBlockId?: string;
+}
+
+export interface AssembledContextSection {
+  kind: AssembledContextSectionKind;
+  title: string;
+  items: AssembledContextItem[];
+}
+
+export interface AssemblyReceipt {
+  assemblyId: string;
+  threadId: string;
+  activeTurn: number;
+  includedFullTurnIds: string[];
+  middleTurnIds: string[];
+  exactSourceItemIds: string[];
+  contextBlockIds: string[];
+  discardedSourceItemIds: string[];
+  estimatedTokens: number;
+  createdAt: string;
+}
+
+export interface AssembledContextPacket {
+  threadId: string;
+  activeTurn: number;
+  sections: AssembledContextSection[];
+  receipt: AssemblyReceipt;
+}
+
 export interface TranscriptStore {
   appendTurn(input: AppendTranscriptTurnInput): Promise<StoredTranscriptTurn>;
+  assembleContext(input: AssembleContextInput): Promise<AssembledContextPacket>;
   buildContextBlocks(
     input: BuildContextBlocksInput,
   ): Promise<StoredContextBlock[]>;
