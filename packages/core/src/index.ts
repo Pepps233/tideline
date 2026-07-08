@@ -7,11 +7,13 @@ import type {
   EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
+  ListSessionsInput,
   SearchContextInput,
   SearchContextResult,
   StoredAssemblyReceipt,
   StoredContextBlock as CoreStoredContextBlock,
   StoredRelationship,
+  StoredSessionSummary,
   TranscriptStore as CoreTranscriptStore,
 } from "./types.js";
 
@@ -36,11 +38,13 @@ export type {
   RawBlobPointer,
   RelationshipEntityType,
   RelationshipType,
+  ListSessionsInput,
   SearchContextInput,
   SearchContextResult,
   SourceLabel,
   StoredAssemblyReceipt,
   StoredRelationship,
+  StoredSessionSummary,
   StoredSourceItem,
   StoredTranscriptTurn,
   TranscriptRole,
@@ -76,6 +80,7 @@ export interface TranscriptStore extends CoreTranscriptStore {
   ): Promise<StoredAssemblyReceipt[]>;
   listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
   listThreadRelationships(threadId: string): Promise<StoredRelationship[]>;
+  listSessions(input?: ListSessionsInput): Promise<StoredSessionSummary[]>;
   refreshThreadSearchIndex(threadId: string): Promise<void>;
   searchContext(input: SearchContextInput): Promise<SearchContextResult>;
 }
