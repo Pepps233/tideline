@@ -57,6 +57,16 @@ export interface StoredSourceItem {
   createdAt: string;
 }
 
+export interface StoredContextBlock {
+  contextBlockId: string;
+  threadId: string;
+  blockIndex: number;
+  summary: string;
+  sourceItemIds: string[];
+  labels: SourceLabel[];
+  createdAt: string;
+}
+
 export interface AppendTranscriptTurnInput {
   threadId: string;
   turnRole: TranscriptRole;
@@ -65,9 +75,24 @@ export interface AppendTranscriptTurnInput {
   createdAt?: Date | string;
 }
 
+export interface BuildContextBlocksInput {
+  threadId: string;
+  groups: Array<{
+    sourceItemIds: string[];
+  }>;
+  createdAt?: Date | string;
+}
+
 export interface TranscriptStore {
   appendTurn(input: AppendTranscriptTurnInput): Promise<StoredTranscriptTurn>;
+  buildContextBlocks(
+    input: BuildContextBlocksInput,
+  ): Promise<StoredContextBlock[]>;
+  getContextBlock(
+    contextBlockId: string,
+  ): Promise<StoredContextBlock | undefined>;
   getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined>;
+  listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
   getSourceItem(sourceItemId: string): Promise<StoredSourceItem | undefined>;
   listTurnSourceItems(turnId: string): Promise<StoredSourceItem[]>;
   listThreadSourceItems(threadId: string): Promise<StoredSourceItem[]>;

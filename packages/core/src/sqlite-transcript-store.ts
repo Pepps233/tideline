@@ -23,11 +23,18 @@ import type {
   SqliteNextTurnIndexRow,
   TranscriptTurnRow,
 } from "./sqlite/rows.js";
+import {
+  buildContextBlocksInTransaction,
+  getContextBlockById,
+  listThreadContextBlocks as listThreadContextBlocksInDb,
+} from "./sqlite-transcript-store/context-blocks.js";
 import type {
   AppendTranscriptTurnInput,
+  BuildContextBlocksInput,
   CreateTranscriptStoreOptions,
   RawBlobPointer,
   SourceLabel,
+  StoredContextBlock,
   StoredSourceItem,
   StoredTranscriptTurn,
   TranscriptStore,
@@ -144,6 +151,34 @@ class SqliteTranscriptStore implements TranscriptStore {
     }
   }
 
+  async buildContextBlocks(
+    input: BuildContextBlocksInput,
+  ): Promise<StoredContextBlock[]> {
+    this.assertOpen();
+
+    const buildTransaction = this.db.transaction(() =>
+      buildContextBlocksInTransaction({
+        clock: this.clock,
+        db: this.db,
+        request: input,
+      }),
+    );
+
+    try {
+      return buildTransaction.immediate();
+    } catch (error) {
+      throw normalizeSqliteError(error);
+    }
+  }
+
+  async getContextBlock(
+    contextBlockId: string,
+  ): Promise<StoredContextBlock | undefined> {
+    this.assertOpen();
+
+    return getContextBlockById(this.db, contextBlockId);
+  }
+
   async getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined> {
     this.assertOpen();
 
@@ -164,6 +199,14 @@ class SqliteTranscriptStore implements TranscriptStore {
       .get(turnId);
 
     return row ? mapTranscriptTurnRow(row) : undefined;
+  }
+
+  async listThreadContextBlocks(
+    threadId: string,
+  ): Promise<StoredContextBlock[]> {
+    this.assertOpen();
+
+    return listThreadContextBlocksInDb(this.db, threadId);
   }
 
   async getSourceItem(

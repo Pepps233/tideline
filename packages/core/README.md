@@ -1,6 +1,5 @@
 # Core Package
 
-This package is reserved for the future context model and assembly engine.
-It will eventually contain splitting, labeling, action selection, block construction, expansion, and assembly logic.
-
-No core runtime implementation is included in this scaffold.
+This package contains the runtime transcript store used by the context model.
+It currently persists raw turns, source items, labels, and builder-created context blocks for compact source material.
+Future work will add expansion, assembly, and retrieval layers around the stored model.
