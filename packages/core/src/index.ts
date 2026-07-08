@@ -2,6 +2,8 @@ import type {
   AssembleContextInput,
   AssembledContextPacket,
   BuildContextBlocksInput as CoreBuildContextBlocksInput,
+  CaptureTurnEventInput,
+  CaptureTurnEventReceipt,
   ExpandContextBlockInput,
   ExpandedContextBlock,
   StoredContextBlock as CoreStoredContextBlock,
@@ -16,6 +18,9 @@ export type {
   AssembledContextPacket,
   AssembledContextSection,
   AssemblyReceipt,
+  CaptureTurnEventInput,
+  CaptureTurnEventKind,
+  CaptureTurnEventReceipt,
   ContextAction,
   CreateTranscriptStoreOptions,
   ExpandContextBlockInput,
@@ -37,6 +42,9 @@ export interface TranscriptStore extends CoreTranscriptStore {
   buildContextBlocks(
     input: BuildContextBlocksInput,
   ): Promise<StoredContextBlock[]>;
+  captureTurnEvent(
+    input: CaptureTurnEventInput,
+  ): Promise<CaptureTurnEventReceipt>;
   expandContextBlock(
     input: ExpandContextBlockInput,
   ): Promise<ExpandedContextBlock | undefined>;
