@@ -36,11 +36,15 @@ test("serves tools over stdio with text and structured content", async (t) => {
 
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
     "assemble_context",
+    "assemble_current_context",
     "expand_context_block",
     "get_assembly_receipt",
     "get_context_block",
+    "get_current_session",
+    "get_session_status",
     "list_assembly_receipts",
     "list_context_blocks",
+    "list_recent_messages",
     "list_relationships",
     "list_sessions",
     "list_thread_turns",
@@ -61,6 +65,27 @@ test("serves tools over stdio with text and structured content", async (t) => {
     sessions.structuredContent.sessions[0].nextActiveTurn,
     fixture.turns.length + 1,
   );
+  assert.deepEqual(
+    sessions.structuredContent.sessions[0].firstUserMessagePreview,
+    {
+      text: "Task: Anchor the original session objective.",
+      role: "user",
+      turnIndex: 1,
+      createdAt: fixture.turns[0].createdAt,
+      truncated: false,
+    },
+  );
+  assert.deepEqual(
+    sessions.structuredContent.sessions[0].latestUserMessagePreview,
+    {
+      text: "Current prompt body stays out of timeline resources.",
+      role: "user",
+      turnIndex: 6,
+      createdAt: fixture.turns[5].createdAt,
+      truncated: false,
+    },
+  );
+  assertNoRawPointerFields(sessions.structuredContent.sessions[0]);
 
   const turns = await client.callTool({
     name: "list_thread_turns",
@@ -264,6 +289,257 @@ test("returns MCP tool errors for user-correctable not found and budget errors",
   assertTextContent(overBudget, "token_budget");
 });
 
+test("selects the current session from env hints before latest activity", async (t) => {
+  const fixture = await createMcpErgonomicsFixture(t);
+  const client = await connectClient(t, {
+    args: [
+      serverPath,
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+    env: {
+      CODEX_CONVERSATION_ID: fixture.latestThreadId,
+      CODEX_SESSION_ID: fixture.latestThreadId,
+      CODEX_THREAD_ID: fixture.latestThreadId,
+      TIDELINE_THREAD_ID: fixture.currentThreadId,
+    },
+  });
+
+  const current = await client.callTool({
+    name: "get_current_session",
+    arguments: {},
+  });
+
+  assert.equal(current.structuredContent.selectionSource, "TIDELINE_THREAD_ID");
+  assert.equal(
+    current.structuredContent.session.threadId,
+    fixture.currentThreadId,
+  );
+  assert.equal(current.structuredContent.nextActiveTurn, 11);
+  assert.deepEqual(current.structuredContent.latestTurn, {
+    turnId: fixture.currentTurns[9].turnId,
+    threadId: fixture.currentThreadId,
+    turnIndex: 10,
+    turnRole: "model",
+    sourceItemIds: fixture.currentTurns[9].sourceItemIds,
+    derivedContextBlockIds: [],
+    createdAt: fixture.currentTurns[9].createdAt,
+  });
+  assert.deepEqual(current.structuredContent.latestUserMessagePreview, {
+    text: "current latest user preview message",
+    role: "user",
+    turnIndex: 9,
+    createdAt: fixture.currentTurns[8].createdAt,
+    truncated: false,
+  });
+  assertTextContent(current, "TIDELINE_THREAD_ID");
+});
+
+test("falls back to the latest active session without env hints", async (t) => {
+  const fixture = await createMcpErgonomicsFixture(t);
+  const client = await connectClient(t, {
+    args: [
+      serverPath,
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+  });
+
+  const current = await client.callTool({
+    name: "get_current_session",
+    arguments: {},
+  });
+
+  assert.equal(
+    current.structuredContent.selectionSource,
+    "latest_active_session",
+  );
+  assert.equal(
+    current.structuredContent.session.threadId,
+    fixture.latestThreadId,
+  );
+  assert.equal(current.structuredContent.nextActiveTurn, 3);
+  assert.equal(
+    current.structuredContent.latestUserMessagePreview.text,
+    "latest session user turn",
+  );
+});
+
+test("lists recent messages with bounded text in chronological order", async (t) => {
+  const fixture = await createMcpErgonomicsFixture(t);
+  const client = await connectClient(t, {
+    args: [
+      serverPath,
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+  });
+
+  const recent = await client.callTool({
+    name: "list_recent_messages",
+    arguments: {
+      max_text_length: 36,
+      thread_id: fixture.currentThreadId,
+    },
+  });
+
+  assert.equal(recent.structuredContent.threadId, fixture.currentThreadId);
+  assert.deepEqual(
+    recent.structuredContent.messages.map((message) => message.turnIndex),
+    [3, 4, 5, 6, 7, 8, 9, 10],
+  );
+  assert.deepEqual(
+    recent.structuredContent.messages.map((message) => message.role),
+    ["user", "model", "user", "model", "user", "model", "user", "model"],
+  );
+
+  const longMessage = recent.structuredContent.messages.find(
+    (message) => message.turnIndex === 5,
+  );
+  assert.ok(longMessage);
+  assert.equal(longMessage.truncated, true);
+  assert.ok(longMessage.text.length <= 36);
+
+  const binaryMessage = recent.structuredContent.messages.find(
+    (message) => message.turnIndex === 6,
+  );
+  assert.ok(binaryMessage);
+  assert.equal(binaryMessage.truncated, false);
+  assert.match(binaryMessage.text, /non-text/i);
+  assert.match(binaryMessage.text, /application\/octet-stream/i);
+
+  const latestMessage = recent.structuredContent.messages.at(-1);
+  assert.equal(latestMessage.text, "current model 10 latest");
+  assert.equal(latestMessage.createdAt, fixture.currentTurns[9].createdAt);
+  assertTextContent(recent, "current latest user preview");
+});
+
+test("reports session status before and after pending tool flush", async (t) => {
+  const fixture = await createMcpStatusFixture(t);
+  const client = await connectClient(t, {
+    args: [
+      serverPath,
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+  });
+
+  const pending = await client.callTool({
+    name: "get_session_status",
+    arguments: { thread_id: fixture.threadId },
+  });
+
+  assert.equal(pending.structuredContent.threadId, fixture.threadId);
+  assert.equal(
+    pending.structuredContent.storage.sqlitePath,
+    fixture.sqlitePath,
+  );
+  assert.equal(pending.structuredContent.storage.blobDir, fixture.blobDir);
+  assert.equal(pending.structuredContent.turnCount, 1);
+  assert.equal(pending.structuredContent.processedEventCount, 3);
+  assert.equal(pending.structuredContent.pendingToolEventCount, 1);
+  assert.equal(pending.structuredContent.captureState.pendingToolEvents, 1);
+  assert.equal(
+    pending.structuredContent.captureState.hookTrustVerification,
+    "not_checked",
+  );
+  assert.equal(
+    pending.structuredContent.captureState.hookInstallVerification,
+    "not_checked",
+  );
+  assert.equal(
+    pending.structuredContent.captureState.doctorCommand,
+    "tideline-context doctor codex",
+  );
+  assert.equal(
+    pending.structuredContent.latestStoredMessagePreview.text,
+    "status prompt before pending tool",
+  );
+
+  await flushPendingStatusTool(fixture);
+
+  const flushed = await client.callTool({
+    name: "get_session_status",
+    arguments: { thread_id: fixture.threadId },
+  });
+
+  assert.equal(flushed.structuredContent.turnCount, 2);
+  assert.equal(flushed.structuredContent.processedEventCount, 4);
+  assert.equal(flushed.structuredContent.pendingToolEventCount, 0);
+  assert.equal(flushed.structuredContent.captureState.pendingToolEvents, 0);
+  assert.equal(
+    flushed.structuredContent.latestActivityAt,
+    fixture.flushCreatedAt,
+  );
+  assert.equal(
+    flushed.structuredContent.latestStoredMessagePreview.role,
+    "model",
+  );
+  assert.match(
+    flushed.structuredContent.latestStoredMessagePreview.text,
+    /Model processed pending shell output/i,
+  );
+});
+
+test("assembles current context with current-session defaults and overrides", async (t) => {
+  const fixture = await createMcpFixture(t);
+  const client = await connectClient(t, {
+    args: [
+      serverPath,
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+    env: {
+      TIDELINE_THREAD_ID: fixture.threadId,
+    },
+  });
+
+  const assembled = await client.callTool({
+    name: "assemble_current_context",
+    arguments: {
+      scope: "mcp",
+      task: "Continue the integration",
+    },
+  });
+
+  assert.equal(assembled.structuredContent.threadId, fixture.threadId);
+  assert.equal(
+    assembled.structuredContent.activeTurn,
+    fixture.turns.length + 1,
+  );
+  assert.equal(
+    assembled.structuredContent.receipt.activeTurn,
+    fixture.turns.length + 1,
+  );
+  assert.equal(
+    assembled.structuredContent.currentSession.selectionSource,
+    "TIDELINE_THREAD_ID",
+  );
+  assert.equal(assembled.structuredContent.request.tokenBudget, 6000);
+  assertTextContent(assembled, fixture.block.summary);
+
+  const overridden = await client.callTool({
+    name: "assemble_current_context",
+    arguments: {
+      active_turn: 6,
+      token_budget: 5000,
+    },
+  });
+
+  assert.equal(overridden.structuredContent.activeTurn, 6);
+  assert.equal(overridden.structuredContent.request.tokenBudget, 5000);
+});
+
 test("uses storage environment fallbacks for stdio startup", async (t) => {
   const fixture = await createMcpFixture(t);
   const client = await connectClient(t, {
@@ -362,6 +638,143 @@ async function createMcpFixture(t) {
   }
 }
 
+async function createMcpErgonomicsFixture(t) {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "tideline-mcp-ergo-"));
+  const sqlitePath = path.join(tempDir, "store.sqlite");
+  const blobDir = path.join(tempDir, "blobs");
+  const currentThreadId = "thread-current-session";
+  const latestThreadId = "thread-latest-session";
+  const store = await createTranscriptStore({ sqlitePath, blobDir });
+
+  t.after(async () => {
+    await rm(tempDir, { force: true, recursive: true });
+  });
+
+  try {
+    const currentTurns = [];
+    const currentRaw = [
+      ["user", "current user 1 first preview"],
+      ["model", "current model 2"],
+      ["user", "current user 3"],
+      ["model", "current model 4"],
+      ["user", `current user 5 ${"x".repeat(120)}`],
+      [
+        "model",
+        new Uint8Array([0xde, 0xad, 0xbe, 0xef]),
+        "application/octet-stream",
+      ],
+      ["user", "current user 7"],
+      ["model", "current model 8"],
+      ["user", "current latest user preview message"],
+      ["model", "current model 10 latest"],
+    ];
+
+    for (const [index, item] of currentRaw.entries()) {
+      const [turnRole, raw, mediaType] = item;
+      currentTurns.push(
+        await store.appendTurn({
+          threadId: currentThreadId,
+          turnRole,
+          raw,
+          mediaType,
+          createdAt: `2026-07-08T12:${String(index + 1).padStart(2, "0")}:00.000Z`,
+        }),
+      );
+    }
+
+    await store.appendTurn({
+      threadId: latestThreadId,
+      turnRole: "user",
+      raw: "latest session user turn",
+      createdAt: "2026-07-08T12:20:00.000Z",
+    });
+    await store.appendTurn({
+      threadId: latestThreadId,
+      turnRole: "model",
+      raw: "latest session model turn",
+      createdAt: "2026-07-08T12:21:00.000Z",
+    });
+
+    return {
+      blobDir,
+      currentThreadId,
+      currentTurns,
+      latestThreadId,
+      sqlitePath,
+    };
+  } finally {
+    await store.close();
+  }
+}
+
+async function createMcpStatusFixture(t) {
+  const tempDir = await mkdtemp(path.join(tmpdir(), "tideline-mcp-status-"));
+  const sqlitePath = path.join(tempDir, "store.sqlite");
+  const blobDir = path.join(tempDir, "blobs");
+  const threadId = "thread-status-session";
+  const flushCreatedAt = "2026-07-08T13:03:00.000Z";
+  const store = await createTranscriptStore({ sqlitePath, blobDir });
+
+  t.after(async () => {
+    await rm(tempDir, { force: true, recursive: true });
+  });
+
+  try {
+    await store.captureTurnEvent({
+      eventId: "status-session-start",
+      kind: "session_start",
+      threadId,
+      createdAt: "2026-07-08T13:00:00.000Z",
+      payload: {},
+    });
+    await store.captureTurnEvent({
+      eventId: "status-prompt",
+      kind: "prompt_submit",
+      threadId,
+      createdAt: "2026-07-08T13:01:00.000Z",
+      payload: { prompt: "status prompt before pending tool" },
+    });
+    await store.captureTurnEvent({
+      eventId: "status-tool",
+      kind: "tool_result",
+      threadId,
+      createdAt: "2026-07-08T13:02:00.000Z",
+      payload: {
+        tool_name: "shell",
+        call_id: "call-status",
+        input: { command: "pnpm --filter @tideline/mcp test" },
+        output: "status tool output",
+        status: "success",
+      },
+    });
+
+    return { blobDir, flushCreatedAt, sqlitePath, threadId };
+  } finally {
+    await store.close();
+  }
+}
+
+async function flushPendingStatusTool(fixture) {
+  const store = await createTranscriptStore({
+    blobDir: fixture.blobDir,
+    sqlitePath: fixture.sqlitePath,
+  });
+
+  try {
+    await store.captureTurnEvent({
+      eventId: "status-model",
+      kind: "model_response_complete",
+      threadId: fixture.threadId,
+      createdAt: fixture.flushCreatedAt,
+      payload: {
+        response: "Model processed pending shell output.",
+      },
+    });
+  } finally {
+    await store.close();
+  }
+}
+
 async function connectClient(t, options) {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -418,6 +831,18 @@ function assertNoResourceText(result, expected) {
     .join("\n");
 
   assert.doesNotMatch(text, new RegExp(escapeRegExp(expected), "i"));
+}
+
+function assertNoRawPointerFields(value) {
+  if (!value || typeof value !== "object") {
+    return;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    assert.notEqual(key, "rawPointerId");
+    assert.notEqual(key, "raw_pointer_id");
+    assertNoRawPointerFields(child);
+  }
 }
 
 function escapeRegExp(value) {

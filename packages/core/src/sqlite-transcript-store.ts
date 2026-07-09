@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { isUtf8 } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -54,13 +55,17 @@ import type {
   EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
+  GetSessionStatusInput,
+  ListRecentMessagesInput,
   ListSessionsInput,
   RawBlobPointer,
   SearchContextInput,
   SearchContextResult,
+  SessionStatus,
   SourceLabel,
   StoredAssemblyReceipt,
   StoredContextBlock,
+  StoredMessagePreview,
   StoredRelationship,
   StoredSessionSummary,
   StoredSourceItem,
@@ -93,11 +98,25 @@ interface SessionSummaryRow {
   latest_activity_at: string;
 }
 
+interface MessagePreviewRow extends TranscriptTurnRow, RawBlobRow {}
+
+interface SessionSummaryPreviews {
+  firstUserMessagePreview: StoredMessagePreview | null;
+  latestUserMessagePreview: StoredMessagePreview | null;
+}
+
+const DEFAULT_RECENT_MESSAGE_LIMIT = 8;
+const MAX_RECENT_MESSAGE_LIMIT = 50;
+const DEFAULT_RECENT_MESSAGE_TEXT_LENGTH = 2000;
+const DEFAULT_SESSION_PREVIEW_TEXT_LENGTH = 240;
+const MAX_MESSAGE_PREVIEW_TEXT_LENGTH = 4000;
+
 class SqliteTranscriptStore implements TranscriptStore {
   private readonly blobDir: string;
   private readonly clock: () => Date | string;
   private readonly db: BetterSqlite3.Database;
   private readonly embeddingProvider: EmbeddingProvider;
+  private readonly sqlitePath: string;
   private isClosed = false;
 
   constructor(options: CreateTranscriptStoreOptions) {
@@ -105,11 +124,12 @@ class SqliteTranscriptStore implements TranscriptStore {
     this.clock = options.clock ?? (() => new Date());
     this.embeddingProvider =
       options.embeddingProvider ?? createDefaultEmbeddingProvider();
+    this.sqlitePath = path.resolve(options.sqlitePath);
 
-    mkdirSync(path.dirname(options.sqlitePath), { recursive: true });
+    mkdirSync(path.dirname(this.sqlitePath), { recursive: true });
     mkdirSync(this.blobDir, { recursive: true });
 
-    this.db = new Database(options.sqlitePath);
+    this.db = new Database(this.sqlitePath);
     this.configureDatabase();
     createSchema(this.db);
   }
@@ -258,6 +278,82 @@ class SqliteTranscriptStore implements TranscriptStore {
     return row ? mapTranscriptTurnRow(row) : undefined;
   }
 
+  async getSessionStatus(input: GetSessionStatusInput): Promise<SessionStatus> {
+    this.assertOpen();
+
+    const threadId = normalizeThreadId(input.threadId);
+    const sessions = await this.listSessions();
+    const session = sessions.find(
+      (candidate) => candidate.threadId === threadId,
+    );
+    const [latestStoredMessagePreview] = await this.listRecentMessages({
+      threadId,
+      limit: 1,
+      maxTextLength: DEFAULT_SESSION_PREVIEW_TEXT_LENGTH,
+    });
+    const pendingToolEventCount = session?.pendingToolEventCount ?? 0;
+
+    return {
+      threadId,
+      storage: {
+        sqlitePath: this.sqlitePath,
+        blobDir: this.blobDir,
+      },
+      latestActivityAt: session?.latestActivityAt ?? null,
+      turnCount: session?.turnCount ?? 0,
+      processedEventCount: session?.processedEventCount ?? 0,
+      pendingToolEventCount,
+      latestStoredMessagePreview: latestStoredMessagePreview ?? null,
+      captureState: {
+        pendingToolEvents: pendingToolEventCount,
+        hookTrustVerification: "not_checked",
+        hookInstallVerification: "not_checked",
+        doctorCommand: "tideline-context doctor codex",
+      },
+    };
+  }
+
+  async listRecentMessages(
+    input: ListRecentMessagesInput,
+  ): Promise<StoredMessagePreview[]> {
+    this.assertOpen();
+
+    const threadId = normalizeThreadId(input.threadId);
+    const limit = normalizeRecentMessageLimit(input.limit);
+    const maxTextLength = normalizeMessagePreviewTextLength(
+      input.maxTextLength,
+      DEFAULT_RECENT_MESSAGE_TEXT_LENGTH,
+    );
+    const rows = this.db
+      .prepare<[string, number], MessagePreviewRow>(
+        `SELECT
+          transcript_turns.turn_id,
+          transcript_turns.thread_id,
+          transcript_turns.turn_index,
+          transcript_turns.turn_role,
+          transcript_turns.raw_pointer_id,
+          transcript_turns.source_item_ids,
+          transcript_turns.derived_context_block_ids,
+          transcript_turns.created_at,
+          raw_blobs.sha256,
+          raw_blobs.byte_length,
+          raw_blobs.media_type,
+          raw_blobs.storage_kind,
+          raw_blobs.storage_path
+        FROM transcript_turns
+        INNER JOIN raw_blobs
+          ON raw_blobs.raw_pointer_id = transcript_turns.raw_pointer_id
+        WHERE transcript_turns.thread_id = ?
+        ORDER BY transcript_turns.turn_index DESC
+        LIMIT ?`,
+      )
+      .all(threadId, limit);
+
+    return rows
+      .reverse()
+      .map((row) => this.mapMessagePreviewRow(row, maxTextLength));
+  }
+
   async listThreadContextBlocks(
     threadId: string,
   ): Promise<StoredContextBlock[]> {
@@ -376,7 +472,18 @@ class SqliteTranscriptStore implements TranscriptStore {
       )
       .all(...(limit === undefined ? [] : [limit]));
 
-    return rows.map(mapSessionSummaryRow);
+    return rows.map((row) =>
+      mapSessionSummaryRow(row, {
+        firstUserMessagePreview: this.getUserMessagePreview(
+          row.thread_id,
+          "ASC",
+        ),
+        latestUserMessagePreview: this.getUserMessagePreview(
+          row.thread_id,
+          "DESC",
+        ),
+      }),
+    );
   }
 
   async getSourceItem(
@@ -625,6 +732,82 @@ class SqliteTranscriptStore implements TranscriptStore {
     );
 
     return rows.map((row) => mapSourceItemRow(row, labelsByItemId));
+  }
+
+  private getUserMessagePreview(
+    threadId: string,
+    order: "ASC" | "DESC",
+  ): StoredMessagePreview | null {
+    const row = this.db
+      .prepare<[string], MessagePreviewRow>(
+        `SELECT
+          transcript_turns.turn_id,
+          transcript_turns.thread_id,
+          transcript_turns.turn_index,
+          transcript_turns.turn_role,
+          transcript_turns.raw_pointer_id,
+          transcript_turns.source_item_ids,
+          transcript_turns.derived_context_block_ids,
+          transcript_turns.created_at,
+          raw_blobs.sha256,
+          raw_blobs.byte_length,
+          raw_blobs.media_type,
+          raw_blobs.storage_kind,
+          raw_blobs.storage_path
+        FROM transcript_turns
+        INNER JOIN raw_blobs
+          ON raw_blobs.raw_pointer_id = transcript_turns.raw_pointer_id
+        WHERE transcript_turns.thread_id = ?
+          AND transcript_turns.turn_role = 'user'
+        ORDER BY transcript_turns.turn_index ${order}
+        LIMIT 1`,
+      )
+      .get(threadId);
+
+    return row
+      ? this.mapMessagePreviewRow(row, DEFAULT_SESSION_PREVIEW_TEXT_LENGTH)
+      : null;
+  }
+
+  private mapMessagePreviewRow(
+    row: MessagePreviewRow,
+    maxTextLength: number,
+  ): StoredMessagePreview {
+    const preview = this.createMessagePreviewText(row, maxTextLength);
+
+    return {
+      text: preview.text,
+      role: normalizeTurnRole(row.turn_role),
+      turnIndex: row.turn_index,
+      createdAt: row.created_at,
+      truncated: preview.truncated,
+    };
+  }
+
+  private createMessagePreviewText(
+    row: MessagePreviewRow,
+    maxTextLength: number,
+  ): { text: string; truncated: boolean } {
+    if (!isTextMediaType(row.media_type)) {
+      return {
+        text: createNonTextMessagePlaceholder(row.media_type),
+        truncated: false,
+      };
+    }
+
+    const raw = this.readAndVerifyBlob(mapRawBlobRow(row));
+
+    if (!isUtf8(raw)) {
+      return {
+        text: createNonTextMessagePlaceholder(row.media_type),
+        truncated: false,
+      };
+    }
+
+    return truncateMessagePreviewText(
+      Buffer.from(raw).toString("utf8"),
+      maxTextLength,
+    );
   }
 
   private getSourceLabels(sourceItemIds: string[]): Map<string, SourceLabel[]> {
@@ -900,7 +1083,76 @@ function normalizeSessionListLimit(
   return limit;
 }
 
-function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionSummary {
+function normalizeRecentMessageLimit(limit: number | undefined): number {
+  if (limit === undefined) {
+    return DEFAULT_RECENT_MESSAGE_LIMIT;
+  }
+
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error("limit must be a positive integer");
+  }
+
+  return Math.min(limit, MAX_RECENT_MESSAGE_LIMIT);
+}
+
+function normalizeMessagePreviewTextLength(
+  maxTextLength: number | undefined,
+  defaultMaxTextLength: number,
+): number {
+  if (maxTextLength === undefined) {
+    return defaultMaxTextLength;
+  }
+
+  if (!Number.isInteger(maxTextLength) || maxTextLength <= 0) {
+    throw new Error("maxTextLength must be a positive integer");
+  }
+
+  return Math.min(maxTextLength, MAX_MESSAGE_PREVIEW_TEXT_LENGTH);
+}
+
+function isTextMediaType(mediaType: string): boolean {
+  const baseType = mediaType.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+
+  return (
+    baseType.startsWith("text/") ||
+    baseType === "application/json" ||
+    baseType === "application/javascript" ||
+    baseType === "application/xml" ||
+    baseType === "application/x-ndjson" ||
+    baseType.endsWith("+json") ||
+    baseType.endsWith("+xml")
+  );
+}
+
+function createNonTextMessagePlaceholder(mediaType: string): string {
+  return `[non-text ${mediaType.split(";", 1)[0]?.trim() ?? mediaType}]`;
+}
+
+function truncateMessagePreviewText(
+  text: string,
+  maxTextLength: number,
+): { text: string; truncated: boolean } {
+  if (text.length <= maxTextLength) {
+    return { text, truncated: false };
+  }
+
+  if (maxTextLength <= 3) {
+    return {
+      text: text.slice(0, maxTextLength),
+      truncated: true,
+    };
+  }
+
+  return {
+    text: `${text.slice(0, maxTextLength - 3)}...`,
+    truncated: true,
+  };
+}
+
+function mapSessionSummaryRow(
+  row: SessionSummaryRow,
+  previews: SessionSummaryPreviews,
+): StoredSessionSummary {
   return {
     threadId: row.thread_id,
     turnCount: row.turn_count,
@@ -912,5 +1164,7 @@ function mapSessionSummaryRow(row: SessionSummaryRow): StoredSessionSummary {
     pendingToolEventCount: row.pending_tool_event_count,
     firstActivityAt: row.first_activity_at,
     latestActivityAt: row.latest_activity_at,
+    firstUserMessagePreview: previews.firstUserMessagePreview,
+    latestUserMessagePreview: previews.latestUserMessagePreview,
   };
 }

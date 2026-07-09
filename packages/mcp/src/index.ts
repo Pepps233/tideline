@@ -6,14 +6,33 @@ import { z } from "zod";
 
 import type {
   AssembleContextInput,
+  CurrentSessionPayload as CoreCurrentSessionPayload,
+  CurrentSessionSelectionSource,
   SearchContextInput,
+  StoredMessagePreview,
+  StoredSessionSummary,
+  StoredTurnMetadata,
   StoredTranscriptTurn,
   TranscriptStore,
 } from "@tideline/core";
 
+export interface CurrentThreadEnvHints {
+  TIDELINE_THREAD_ID?: string;
+  CODEX_THREAD_ID?: string;
+  CODEX_SESSION_ID?: string;
+  CODEX_CONVERSATION_ID?: string;
+}
+
+export interface TidelineMcpStorageConfig {
+  sqlitePath: string;
+  blobDir: string;
+}
+
 export interface CreateTidelineMcpServerOptions {
   store: TranscriptStore;
+  currentThreadEnv?: CurrentThreadEnvHints;
   name?: string;
+  storageConfig?: TidelineMcpStorageConfig;
   version?: string;
 }
 
@@ -33,14 +52,15 @@ interface SessionsPayload {
   sessions: Awaited<ReturnType<TranscriptStore["listSessions"]>>;
 }
 
-interface TurnMetadata {
-  turnId: string;
+type TurnMetadata = StoredTurnMetadata;
+
+interface CurrentSessionPayload extends CoreCurrentSessionPayload {
+  latestTurn: TurnMetadata | null;
+}
+
+interface RecentMessagesPayload {
   threadId: string;
-  turnIndex: number;
-  turnRole: StoredTranscriptTurn["turnRole"];
-  sourceItemIds: string[];
-  derivedContextBlockIds: string[];
-  createdAt: string;
+  messages: StoredMessagePreview[];
 }
 
 interface TimelinePayload {
@@ -51,7 +71,14 @@ interface TimelinePayload {
 }
 
 const DEFAULT_EXPANSION_TOKEN_BUDGET = 5000;
+const DEFAULT_CURRENT_CONTEXT_TOKEN_BUDGET = 6000;
 const MAX_EXPANSION_TOKEN_BUDGET = 15000;
+const CURRENT_THREAD_ENV_ORDER = [
+  "TIDELINE_THREAD_ID",
+  "CODEX_THREAD_ID",
+  "CODEX_SESSION_ID",
+  "CODEX_CONVERSATION_ID",
+] as const;
 
 export function createTidelineMcpServer(
   options: CreateTidelineMcpServerOptions,
@@ -62,13 +89,17 @@ export function createTidelineMcpServer(
   });
   const { store } = options;
 
-  registerTools(server, store);
+  registerTools(server, store, options);
   registerResources(server, store);
 
   return server;
 }
 
-function registerTools(server: McpServer, store: TranscriptStore): void {
+function registerTools(
+  server: McpServer,
+  store: TranscriptStore,
+  options: CreateTidelineMcpServerOptions,
+): void {
   server.registerTool(
     "list_sessions",
     {
@@ -87,6 +118,85 @@ function registerTools(server: McpServer, store: TranscriptStore): void {
         };
 
         return toolResult(payload);
+      }),
+  );
+
+  server.registerTool(
+    "get_current_session",
+    {
+      description:
+        "Get the current Tideline session from env hints or latest activity.",
+      inputSchema: {},
+    },
+    async () =>
+      withToolErrors(async () => {
+        const currentSession = await resolveCurrentSession(
+          store,
+          options.currentThreadEnv ?? {},
+        );
+
+        if (!currentSession) {
+          return toolError("No Tideline sessions found");
+        }
+
+        return toolResult(currentSession);
+      }),
+  );
+
+  server.registerTool(
+    "list_recent_messages",
+    {
+      description:
+        "List recent stored Tideline messages with bounded text previews.",
+      inputSchema: {
+        thread_id: z.string().min(1).optional(),
+        limit: z.number().int().positive().optional(),
+        max_text_length: z.number().int().positive().optional(),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        const threadId =
+          input.thread_id ??
+          (await requireCurrentSession(store, options.currentThreadEnv ?? {}))
+            .session.threadId;
+        const messages = await store.listRecentMessages({
+          threadId,
+          ...(input.limit === undefined ? {} : { limit: input.limit }),
+          ...(input.max_text_length === undefined
+            ? {}
+            : { maxTextLength: input.max_text_length }),
+        });
+        const payload: RecentMessagesPayload = {
+          threadId,
+          messages,
+        };
+
+        return toolResult(payload);
+      }),
+  );
+
+  server.registerTool(
+    "get_session_status",
+    {
+      description:
+        "Report Tideline storage, latest activity, and hook capture state.",
+      inputSchema: {
+        thread_id: z.string().min(1).optional(),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        const threadId =
+          input.thread_id ??
+          (await requireCurrentSession(store, options.currentThreadEnv ?? {}))
+            .session.threadId;
+        const status = await store.getSessionStatus({ threadId });
+
+        return toolResult({
+          ...status,
+          storage: options.storageConfig ?? status.storage,
+        });
       }),
   );
 
@@ -124,6 +234,57 @@ function registerTools(server: McpServer, store: TranscriptStore): void {
         const packet = await store.assembleContext(request);
 
         return toolResult(packet);
+      }),
+  );
+
+  server.registerTool(
+    "assemble_current_context",
+    {
+      description:
+        "Assemble compact Tideline context for the current detected session.",
+      inputSchema: {
+        active_turn: z.number().int().positive().optional(),
+        task: z.string().optional(),
+        scope: z.string().optional(),
+        token_budget: z.number().positive().optional(),
+      },
+    },
+    async (input) =>
+      withToolErrors(async () => {
+        const currentSession = await requireCurrentSession(
+          store,
+          options.currentThreadEnv ?? {},
+        );
+        const activeTurn = input.active_turn ?? currentSession.nextActiveTurn;
+        const tokenBudget =
+          input.token_budget ?? DEFAULT_CURRENT_CONTEXT_TOKEN_BUDGET;
+        const request: AssembleContextInput = {
+          threadId: currentSession.session.threadId,
+          activeTurn,
+          tokenBudget,
+        };
+
+        if (input.task !== undefined) {
+          request.task = input.task;
+        }
+
+        if (input.scope !== undefined) {
+          request.scope = input.scope;
+        }
+
+        const packet = await store.assembleContext(request);
+
+        return toolResult({
+          ...packet,
+          currentSession,
+          request: {
+            threadId: request.threadId,
+            activeTurn: request.activeTurn,
+            tokenBudget: request.tokenBudget,
+            ...(request.task === undefined ? {} : { task: request.task }),
+            ...(request.scope === undefined ? {} : { scope: request.scope }),
+          },
+        });
       }),
   );
 
@@ -412,6 +573,81 @@ function registerResources(server: McpServer, store: TranscriptStore): void {
       return resourceResult(uri.href, expanded);
     },
   );
+}
+
+async function requireCurrentSession(
+  store: TranscriptStore,
+  currentThreadEnv: CurrentThreadEnvHints,
+): Promise<CurrentSessionPayload> {
+  const currentSession = await resolveCurrentSession(store, currentThreadEnv);
+
+  if (!currentSession) {
+    throw new Error("No Tideline sessions found");
+  }
+
+  return currentSession;
+}
+
+async function resolveCurrentSession(
+  store: TranscriptStore,
+  currentThreadEnv: CurrentThreadEnvHints,
+): Promise<CurrentSessionPayload | undefined> {
+  const sessions = await store.listSessions();
+  const sessionsByThreadId = new Map(
+    sessions.map((session) => [session.threadId, session]),
+  );
+
+  for (const selectionSource of CURRENT_THREAD_ENV_ORDER) {
+    const threadId = readCurrentThreadHint(currentThreadEnv, selectionSource);
+
+    if (!threadId) {
+      continue;
+    }
+
+    const session = sessionsByThreadId.get(threadId);
+
+    if (session) {
+      return buildCurrentSessionPayload(store, session, selectionSource);
+    }
+  }
+
+  const [latestSession] = sessions;
+
+  return latestSession
+    ? buildCurrentSessionPayload(store, latestSession, "latest_active_session")
+    : undefined;
+}
+
+async function buildCurrentSessionPayload(
+  store: TranscriptStore,
+  session: StoredSessionSummary,
+  selectionSource: CurrentSessionSelectionSource,
+): Promise<CurrentSessionPayload> {
+  const turns = await store.listThreadTurns(session.threadId);
+  const latestTurn = turns.length > 0 ? turns[turns.length - 1] : undefined;
+
+  return {
+    session,
+    selectionSource,
+    nextActiveTurn: session.nextActiveTurn,
+    latestTurn: latestTurn ? toTurnMetadata(latestTurn) : null,
+    latestUserMessagePreview: session.latestUserMessagePreview,
+  };
+}
+
+function readCurrentThreadHint(
+  currentThreadEnv: CurrentThreadEnvHints,
+  key: (typeof CURRENT_THREAD_ENV_ORDER)[number],
+): string | undefined {
+  const value = currentThreadEnv[key];
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 async function withToolErrors<T>(
