@@ -13,6 +13,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./codex-hook-adapter": {
+      "types": "./dist/codex-hook-adapter.d.ts",
+      "import": "./dist/codex-hook-adapter.js"
     }
   },
   "files": [

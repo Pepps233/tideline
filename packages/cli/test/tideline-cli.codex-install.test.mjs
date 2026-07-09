@@ -112,9 +112,9 @@ command = "other-mcp"
     "--hooks-path",
     fixture.hooksPath,
     "--mcp-command",
-    "tideline",
+    "tideline-context",
     "--hook-command",
-    "tideline hook codex",
+    "tideline-context hook codex",
   ]);
 
   assert.equal(result.exit.code, 0, result.stderr);
@@ -125,13 +125,13 @@ command = "other-mcp"
   assert.match(config, /\[model_providers\.local]/);
   assert.match(config, /\[mcp_servers\.other]/);
   assert.equal(countOccurrences(config, "old-tideline-mcp"), 0);
-  assert.match(config, /command = "tideline"/);
+  assert.match(config, /command = "tideline-context"/);
   assert.equal(countOccurrences(config, "[mcp_servers.tideline]"), 1);
   assert.equal(hooks.hooks.PreToolUse[0].hooks[0].command, "echo keep");
   assert.equal(hooks.hooks.UserPromptSubmit.length, 1);
   assert.equal(
     hooks.hooks.UserPromptSubmit[0].hooks[0].command,
-    "tideline hook codex --event UserPromptSubmit",
+    "tideline-context hook codex --event UserPromptSubmit",
   );
 });
 

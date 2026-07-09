@@ -6,7 +6,7 @@
   "main": "./dist/cli.js",
   "types": "./dist/cli.d.ts",
   "bin": {
-    "tideline": "./dist/cli.js"
+    "tideline-context": "./dist/cli.js"
   },
   "files": [
     "dist"
@@ -17,6 +17,12 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm --filter @tideline/hooks build && pnpm --filter @tideline/mcp build && pnpm run build && node --test \"test/**/*.test.mjs\"",
     "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@tideline/core": "workspace:*",
+    "@tideline/hooks": "workspace:*",
+    "@tideline/mcp": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.0"

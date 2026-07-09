@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { pathToFileURL } from "node:url";
 import {
   createTranscriptStore,
   resolveTidelineStorageConfig,
@@ -12,13 +13,18 @@ interface StorageConfig {
   blobDir: string;
 }
 
-void main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (isDirectEntrypoint(import.meta.url)) {
+  void runTidelineMcpCli().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}
 
-async function main(): Promise<void> {
-  const config = parseStorageConfig(process.argv.slice(2), process.env);
+export async function runTidelineMcpCli(
+  args: string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const config = parseStorageConfig(args, env);
   const store = await createTranscriptStore({
     sqlitePath: config.sqlitePath,
     blobDir: config.blobDir,
@@ -28,6 +34,12 @@ async function main(): Promise<void> {
 
   installShutdownHandlers(store);
   await server.connect(transport);
+}
+
+function isDirectEntrypoint(metaUrl: string): boolean {
+  const entrypoint = process.argv[1];
+
+  return entrypoint ? pathToFileURL(entrypoint).href === metaUrl : false;
 }
 
 function parseStorageConfig(

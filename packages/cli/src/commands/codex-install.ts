@@ -1,72 +1,49 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-interface CodexInstallArgs {
-  configPath?: string;
-  dryRun: boolean;
-  hookCommand?: string;
-  hooksPath?: string;
-  mcpCommand?: string;
-  repoRoot?: string;
-}
-
-interface ParsedCodexInstallArgs extends CodexInstallArgs {
-  help: boolean;
-}
-
-interface McpCommandSpec {
-  args: string[];
-  command: string;
-}
-
-interface HookHandler {
-  command: string;
-  statusMessage?: string;
-  timeout?: number;
-  type: "command";
-  [key: string]: unknown;
-}
-
-interface HookGroup {
-  hooks: HookHandler[];
-  matcher?: string;
-  [key: string]: unknown;
-}
-
-interface HooksFile {
-  hooks?: Record<string, HookGroup[]>;
-  [key: string]: unknown;
-}
-
-interface HookEventDefinition {
-  event: "SessionStart" | "UserPromptSubmit" | "PostToolUse" | "Stop";
-  matcher?: string;
-  statusMessage: string;
-}
-
-const TIDELINE_MCP_TABLE = "mcp_servers.tideline";
-const HOOK_EVENTS: HookEventDefinition[] = [
-  {
-    event: "SessionStart",
-    matcher: "startup|resume|clear|compact",
-    statusMessage: "Capturing Tideline session",
-  },
-  {
-    event: "UserPromptSubmit",
-    statusMessage: "Capturing Tideline prompt",
-  },
-  {
-    event: "PostToolUse",
-    matcher: "*",
-    statusMessage: "Capturing Tideline tool output",
-  },
-  {
-    event: "Stop",
-    statusMessage: "Capturing Tideline response",
-  },
-];
+import {
+  type CodexInstallArgs,
+  type CodexMaintenanceArgs,
+  parseCodexInstallArgs,
+  parseCodexMaintenanceArgs,
+} from "./codex/args.js";
+import {
+  assertTidelineHooks,
+  assertTidelineMcpConfig,
+  formatCommandForDisplay,
+  parseHooksFile,
+  removeTidelineHooks,
+  removeTomlTable,
+  shellQuote,
+  upsertTidelineHooks,
+  upsertTidelineMcpConfig,
+} from "./codex/config-files.js";
+import {
+  assertHookStdoutEmpty,
+  assertMcpTools,
+  captureSyntheticHook,
+} from "./codex/doctor.js";
+import {
+  assertStorageReady,
+  ensureTidelineStorage,
+  expandHomePath,
+  readInstallRecord,
+  readTextIfExists,
+  removeCodexInstallRecord,
+  resolveCodexPaths,
+  resolveCodexPathsFromRecord,
+  resolveInstallStorage,
+  upsertInstallRecord,
+} from "./codex/storage.js";
+import {
+  CODEX_AGENT_ID,
+  PUBLIC_CLI_COMMAND,
+  TIDELINE_MCP_TABLE,
+  type CodexPaths,
+  type McpCommandSpec,
+  type TidelineStoragePaths,
+} from "./codex/types.js";
 
 export async function runCodexInstallCommand(args: string[]): Promise<void> {
   const installArgs = parseCodexInstallArgs(args);
@@ -79,129 +56,176 @@ export async function runCodexInstallCommand(args: string[]): Promise<void> {
   await installCodexIntegration(installArgs);
 }
 
+export async function runCodexDoctorCommand(args: string[]): Promise<void> {
+  const doctorArgs = parseCodexMaintenanceArgs(args, "doctor");
+
+  if (doctorArgs.help) {
+    printCodexDoctorHelp();
+    return;
+  }
+
+  await doctorCodexIntegration(doctorArgs);
+}
+
+export async function runCodexUninstallCommand(args: string[]): Promise<void> {
+  const uninstallArgs = parseCodexMaintenanceArgs(args, "uninstall");
+
+  if (uninstallArgs.help) {
+    printCodexUninstallHelp();
+    return;
+  }
+
+  await uninstallCodexIntegration(uninstallArgs);
+}
+
 async function installCodexIntegration(args: CodexInstallArgs): Promise<void> {
   const repoRoot = resolveRepoRoot(args.repoRoot);
-  const configPath = path.resolve(
-    expandHomePath(args.configPath ?? "~/.codex/config.toml"),
-  );
-  const hooksPath = path.resolve(
-    expandHomePath(args.hooksPath ?? "~/.codex/hooks.json"),
-  );
+  const paths = resolveCodexPaths(args);
+  const storage = resolveInstallStorage(args, paths);
   const mcpCommand = resolveMcpCommand(args, repoRoot);
   const hookCommand = resolveHookCommand(args, repoRoot);
-  const currentConfig = await readTextIfExists(configPath);
-  const currentHooks = await readTextIfExists(hooksPath);
+  const currentConfig = await readTextIfExists(paths.configPath);
+  const currentHooks = await readTextIfExists(paths.hooksPath);
   const nextConfig = upsertTidelineMcpConfig(currentConfig, mcpCommand);
   const nextHooks = upsertTidelineHooks(currentHooks, hookCommand);
 
   if (args.dryRun) {
-    process.stdout.write(
-      [
-        "Tideline Codex integration dry run.",
-        `Would update config: ${configPath}`,
-        `Would update hooks: ${hooksPath}`,
-        `MCP command: ${formatCommandForDisplay(mcpCommand)}`,
-        `Hook command: ${hookCommand}`,
-      ].join("\n") + "\n",
-    );
+    writeInstallDryRun({
+      args,
+      hookCommand,
+      mcpCommand,
+      paths,
+      storage,
+    });
     return;
   }
 
-  await mkdir(path.dirname(configPath), { recursive: true });
-  await mkdir(path.dirname(hooksPath), { recursive: true });
-  await writeFile(configPath, nextConfig, "utf8");
-  await writeFile(hooksPath, nextHooks, "utf8");
+  await ensureTidelineStorage(storage);
+  await mkdir(path.dirname(paths.configPath), { recursive: true });
+  await mkdir(path.dirname(paths.hooksPath), { recursive: true });
+  await writeFile(paths.configPath, nextConfig, "utf8");
+  await writeFile(paths.hooksPath, nextHooks, "utf8");
+  await upsertInstallRecord(storage.installPath, {
+    configPath: paths.configPath,
+    hooksPath: paths.hooksPath,
+    installed: true,
+  });
+
+  if (args.json) {
+    writeJson({
+      agent: CODEX_AGENT_ID,
+      configPath: paths.configPath,
+      hooksPath: paths.hooksPath,
+      installPath: storage.installPath,
+      sqlitePath: storage.sqlitePath,
+      status: "installed",
+      storagePath: storage.storagePath,
+    });
+    return;
+  }
 
   process.stdout.write(
     [
       "Installed Tideline Codex integration.",
-      `Updated config: ${configPath}`,
-      `Updated hooks: ${hooksPath}`,
+      `Updated config: ${paths.configPath}`,
+      `Updated hooks: ${paths.hooksPath}`,
+      `Initialized storage: ${storage.storagePath}`,
       "Restart Codex, then run /hooks to review and trust the Tideline hooks.",
     ].join("\n") + "\n",
   );
 }
 
-function parseCodexInstallArgs(args: string[]): ParsedCodexInstallArgs {
-  const parsed: ParsedCodexInstallArgs = { dryRun: false, help: false };
+async function doctorCodexIntegration(
+  args: CodexMaintenanceArgs,
+): Promise<void> {
+  const storage = resolveInstallStorage(args, resolveCodexPaths(args));
+  const installRecord = await readInstallRecord(storage.installPath);
+  const paths = resolveCodexPathsFromRecord(args, installRecord);
+  const checks: string[] = [];
 
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  await assertStorageReady(storage);
+  checks.push(`OK storage: ${storage.storagePath}`);
+  checks.push(`OK sqlite: ${storage.sqlitePath}`);
 
-    if (arg === "--help" || arg === "-h") {
-      parsed.help = true;
-      continue;
-    }
+  const config = await readTextIfExists(paths.configPath);
+  assertTidelineMcpConfig(config, paths.configPath);
+  checks.push(`OK mcp config: ${paths.configPath}`);
 
-    if (arg === "--dry-run") {
-      parsed.dryRun = true;
-      continue;
-    }
+  const hooks = parseHooksFile(await readTextIfExists(paths.hooksPath));
+  assertTidelineHooks(hooks, paths.hooksPath);
+  checks.push(`OK hooks config: ${paths.hooksPath}`);
 
-    if (arg === "--config-path") {
-      parsed.configPath = readArgValue(args, (index += 1), arg);
-      continue;
-    }
+  await assertHookStdoutEmpty(storage);
+  checks.push("OK hook stdout: empty");
 
-    if (arg?.startsWith("--config-path=")) {
-      parsed.configPath = arg.slice("--config-path=".length);
-      continue;
-    }
+  const receipt = await captureSyntheticHook(storage);
+  checks.push(`OK synthetic capture: thread ${receipt.threadId}`);
 
-    if (arg === "--hooks-path") {
-      parsed.hooksPath = readArgValue(args, (index += 1), arg);
-      continue;
-    }
+  const toolName = await assertMcpTools(storage);
+  checks.push(`OK mcp tools: ${toolName}`);
 
-    if (arg?.startsWith("--hooks-path=")) {
-      parsed.hooksPath = arg.slice("--hooks-path=".length);
-      continue;
-    }
-
-    if (arg === "--repo-root") {
-      parsed.repoRoot = readArgValue(args, (index += 1), arg);
-      continue;
-    }
-
-    if (arg?.startsWith("--repo-root=")) {
-      parsed.repoRoot = arg.slice("--repo-root=".length);
-      continue;
-    }
-
-    if (arg === "--mcp-command") {
-      parsed.mcpCommand = readArgValue(args, (index += 1), arg);
-      continue;
-    }
-
-    if (arg?.startsWith("--mcp-command=")) {
-      parsed.mcpCommand = arg.slice("--mcp-command=".length);
-      continue;
-    }
-
-    if (arg === "--hook-command") {
-      parsed.hookCommand = readArgValue(args, (index += 1), arg);
-      continue;
-    }
-
-    if (arg?.startsWith("--hook-command=")) {
-      parsed.hookCommand = arg.slice("--hook-command=".length);
-      continue;
-    }
-
-    throw new Error(`Unknown argument: ${arg ?? ""}`);
+  if (args.json) {
+    writeJson({
+      checks,
+      status: "ok",
+    });
+    return;
   }
 
-  return parsed;
+  process.stdout.write(
+    [
+      "Tideline doctor: Codex",
+      "",
+      ...checks,
+      "",
+      "Next:",
+      "  Restart Codex",
+      "  Run /hooks and trust Tideline hooks",
+    ].join("\n") + "\n",
+  );
 }
 
-function readArgValue(args: string[], index: number, flag: string): string {
-  const value = args[index];
+async function uninstallCodexIntegration(
+  args: CodexMaintenanceArgs,
+): Promise<void> {
+  const storage = resolveInstallStorage(args, resolveCodexPaths(args));
+  const installRecord = await readInstallRecord(storage.installPath);
+  const paths = resolveCodexPathsFromRecord(args, installRecord);
+  const currentConfig = await readTextIfExists(paths.configPath);
+  const currentHooks = await readTextIfExists(paths.hooksPath);
 
-  if (!value || value.startsWith("--")) {
-    throw new Error(`Missing value for ${flag}`);
+  if (currentConfig.length > 0) {
+    await writeFile(
+      paths.configPath,
+      removeTomlTable(currentConfig, TIDELINE_MCP_TABLE),
+      "utf8",
+    );
   }
 
-  return value;
+  if (currentHooks.length > 0) {
+    await writeFile(paths.hooksPath, removeTidelineHooks(currentHooks), "utf8");
+  }
+
+  await removeCodexInstallRecord(storage.installPath);
+
+  if (args.json) {
+    writeJson({
+      agent: CODEX_AGENT_ID,
+      configPath: paths.configPath,
+      hooksPath: paths.hooksPath,
+      status: "uninstalled",
+    });
+    return;
+  }
+
+  process.stdout.write(
+    [
+      "Uninstalled Tideline Codex integration.",
+      `Updated config: ${paths.configPath}`,
+      `Updated hooks: ${paths.hooksPath}`,
+      "Tideline stored data was left in place.",
+    ].join("\n") + "\n",
+  );
 }
 
 function resolveMcpCommand(
@@ -212,15 +236,13 @@ function resolveMcpCommand(
     return { args: [], command: args.mcpCommand };
   }
 
-  const mcpScript = repoRoot
-    ? path.join(repoRoot, "packages", "mcp", "dist", "cli.js")
-    : undefined;
+  const cliScript = resolveLocalCliScript(repoRoot);
 
-  if (mcpScript && existsSync(mcpScript)) {
-    return { args: [mcpScript], command: process.execPath };
+  if (cliScript) {
+    return { args: [cliScript, "mcp"], command: process.execPath };
   }
 
-  return { args: [], command: "tideline-mcp" };
+  return { args: ["mcp"], command: PUBLIC_CLI_COMMAND };
 }
 
 function resolveHookCommand(
@@ -231,245 +253,78 @@ function resolveHookCommand(
     return args.hookCommand;
   }
 
-  const hookScript = repoRoot
-    ? path.join(repoRoot, "packages", "hooks", "dist", "codex-hook-adapter.js")
-    : undefined;
+  const cliScript = resolveLocalCliScript(repoRoot);
 
-  if (hookScript && existsSync(hookScript)) {
-    return `${shellQuote(process.execPath)} ${shellQuote(hookScript)}`;
+  if (cliScript) {
+    return `${shellQuote(process.execPath)} ${shellQuote(cliScript)} hook codex`;
   }
 
-  return "tideline-codex-hook";
+  return `${PUBLIC_CLI_COMMAND} hook codex`;
+}
+
+function resolveLocalCliScript(
+  repoRoot: string | undefined,
+): string | undefined {
+  if (!repoRoot) {
+    return undefined;
+  }
+
+  const cliScript = path.join(repoRoot, "packages", "cli", "dist", "cli.js");
+
+  if (!existsSync(cliScript)) {
+    throw new Error(
+      `Local Tideline CLI build was not found at ${cliScript}. Run pnpm --filter @tideline/cli build first.`,
+    );
+  }
+
+  return cliScript;
 }
 
 function resolveRepoRoot(repoRootArg: string | undefined): string | undefined {
-  if (repoRootArg) {
-    return path.resolve(expandHomePath(repoRootArg));
-  }
-
-  let current = process.cwd();
-
-  while (true) {
-    if (
-      existsSync(path.join(current, "package.json")) &&
-      existsSync(path.join(current, "packages", "mcp")) &&
-      existsSync(path.join(current, "packages", "hooks"))
-    ) {
-      return current;
-    }
-
-    const parent = path.dirname(current);
-
-    if (parent === current) {
-      return undefined;
-    }
-
-    current = parent;
-  }
+  return repoRootArg ? path.resolve(expandHomePath(repoRootArg)) : undefined;
 }
 
-function upsertTidelineMcpConfig(
-  currentConfig: string,
-  command: McpCommandSpec,
-): string {
-  const tableBody = [
-    `command = ${tomlString(command.command)}`,
-    ...(command.args.length > 0 ? [`args = ${tomlArray(command.args)}`] : []),
-    "enabled = true",
-    "startup_timeout_sec = 20",
-    "tool_timeout_sec = 60",
-  ].join("\n");
+function writeInstallDryRun(input: {
+  args: CodexInstallArgs;
+  hookCommand: string;
+  mcpCommand: McpCommandSpec;
+  paths: CodexPaths;
+  storage: TidelineStoragePaths;
+}): void {
+  if (input.args.json) {
+    writeJson({
+      configPath: input.paths.configPath,
+      dryRun: true,
+      hookCommand: input.hookCommand,
+      hooksPath: input.paths.hooksPath,
+      mcpCommand: input.mcpCommand,
+      storagePath: input.storage.storagePath,
+    });
+    return;
+  }
 
-  return (
-    upsertTomlTable(currentConfig, TIDELINE_MCP_TABLE, tableBody).trimEnd() +
-    "\n"
+  process.stdout.write(
+    [
+      "Tideline Codex integration dry run.",
+      `Would update config: ${input.paths.configPath}`,
+      `Would update hooks: ${input.paths.hooksPath}`,
+      `Would initialize storage: ${input.storage.storagePath}`,
+      `MCP command: ${formatCommandForDisplay(input.mcpCommand)}`,
+      `Hook command: ${input.hookCommand}`,
+    ].join("\n") + "\n",
   );
 }
 
-function upsertTomlTable(
-  content: string,
-  tableName: string,
-  tableBody: string,
-): string {
-  const lines = content.length > 0 ? content.split(/\r?\n/u) : [];
-  const tableHeader = `[${tableName}]`;
-  const start = lines.findIndex(
-    (line) => parseTomlTableName(line) === tableName,
-  );
-  const replacement = [tableHeader, tableBody, ""];
-
-  if (start === -1) {
-    const base = lines.filter(
-      (line, index) => index !== lines.length - 1 || line.length > 0,
-    );
-
-    return [...base, ...(base.length > 0 ? [""] : []), ...replacement].join(
-      "\n",
-    );
-  }
-
-  let end = start + 1;
-
-  while (end < lines.length) {
-    const foundTableName = parseTomlTableName(lines[end]);
-
-    if (
-      foundTableName &&
-      foundTableName !== tableName &&
-      !foundTableName.startsWith(`${tableName}.`)
-    ) {
-      break;
-    }
-
-    end += 1;
-  }
-
-  return [...lines.slice(0, start), ...replacement, ...lines.slice(end)].join(
-    "\n",
-  );
-}
-
-function parseTomlTableName(line: string | undefined): string | undefined {
-  const match = line?.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/u);
-
-  return match?.[1]?.trim();
-}
-
-function upsertTidelineHooks(
-  currentHooks: string,
-  hookCommand: string,
-): string {
-  const hooksFile = parseHooksFile(currentHooks);
-  const hooks = hooksFile.hooks ?? {};
-
-  for (const definition of HOOK_EVENTS) {
-    const existingGroups = hooks[definition.event] ?? [];
-    const retainedGroups = existingGroups
-      .map(removeTidelineHandlers)
-      .filter((group): group is HookGroup => group.hooks.length > 0);
-
-    hooks[definition.event] = [
-      ...retainedGroups,
-      createTidelineHookGroup(definition, hookCommand),
-    ];
-  }
-
-  hooksFile.hooks = hooks;
-  return `${JSON.stringify(hooksFile, null, 2)}\n`;
-}
-
-function parseHooksFile(content: string): HooksFile {
-  if (content.trim().length === 0) {
-    return { hooks: {} };
-  }
-
-  const parsed = JSON.parse(content) as unknown;
-
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Codex hooks file must contain a JSON object.");
-  }
-
-  const hooksFile = parsed as HooksFile;
-
-  if (
-    hooksFile.hooks !== undefined &&
-    (!hooksFile.hooks ||
-      typeof hooksFile.hooks !== "object" ||
-      Array.isArray(hooksFile.hooks))
-  ) {
-    throw new Error("Codex hooks file hooks field must be an object.");
-  }
-
-  return hooksFile;
-}
-
-function removeTidelineHandlers(group: HookGroup): HookGroup {
-  return {
-    ...group,
-    hooks: group.hooks.filter((handler) => !isTidelineHookHandler(handler)),
-  };
-}
-
-function isTidelineHookHandler(handler: HookHandler): boolean {
-  return (
-    handler.command.includes("tideline-codex-hook") ||
-    handler.command.includes("codex-hook-adapter.js") ||
-    handler.statusMessage?.startsWith("Capturing Tideline ") === true
-  );
-}
-
-function createTidelineHookGroup(
-  definition: HookEventDefinition,
-  hookCommand: string,
-): HookGroup {
-  const group: HookGroup = {
-    hooks: [
-      {
-        command: `${hookCommand} --event ${definition.event}`,
-        statusMessage: definition.statusMessage,
-        timeout: 30,
-        type: "command",
-      },
-    ],
-  };
-
-  if (definition.matcher) {
-    group.matcher = definition.matcher;
-  }
-
-  return group;
-}
-
-async function readTextIfExists(filePath: string): Promise<string> {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      error.code === "ENOENT"
-    ) {
-      return "";
-    }
-
-    throw error;
-  }
-}
-
-function expandHomePath(value: string): string {
-  if (value === "~") {
-    return homedir();
-  }
-
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return path.join(homedir(), value.slice(2));
-  }
-
-  return value;
-}
-
-function tomlString(value: string): string {
-  return JSON.stringify(value);
-}
-
-function tomlArray(values: string[]): string {
-  return `[${values.map(tomlString).join(", ")}]`;
-}
-
-function shellQuote(value: string): string {
-  return `"${value.replace(/(["\\$`])/g, "\\$1")}"`;
-}
-
-function formatCommandForDisplay(command: McpCommandSpec): string {
-  return [command.command, ...command.args].map(shellQuote).join(" ");
+function writeJson(value: unknown): void {
+  process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
 function printCodexInstallHelp(): void {
-  process.stdout.write(`Usage: tideline codex install [options]
+  process.stdout.write(`Usage: ${PUBLIC_CLI_COMMAND} install codex [options]
 
-Writes Tideline MCP configuration to Codex config.toml and Tideline capture
-hooks to Codex hooks.json. Existing non-Tideline config is preserved.
+Writes Tideline MCP configuration to Codex config.toml, Tideline capture hooks
+to Codex hooks.json, and an install record to Tideline storage.
+Existing non-Tideline config is preserved.
 
 Options:
   --config-path <path>  Codex config.toml path
@@ -477,6 +332,35 @@ Options:
   --repo-root <path>    Tideline checkout root for local dist commands
   --mcp-command <cmd>   Use a PATH command for the MCP server
   --hook-command <cmd>  Use a PATH or shell command for Codex hooks
-  --dry-run            Print the planned install without writing files
+  --dry-run             Print the planned install without writing files
+  --json                Print machine-readable output
+  --yes                 Run noninteractively
+`);
+}
+
+function printCodexDoctorHelp(): void {
+  process.stdout.write(`Usage: ${PUBLIC_CLI_COMMAND} doctor codex [options]
+
+Validates Tideline storage, Codex MCP config, Codex hooks, synthetic capture,
+and MCP tool exposure.
+
+Options:
+  --config-path <path>  Codex config.toml path
+  --hooks-path <path>   Codex hooks.json path
+  --json                Print machine-readable output
+`);
+}
+
+function printCodexUninstallHelp(): void {
+  process.stdout.write(`Usage: ${PUBLIC_CLI_COMMAND} uninstall codex [options]
+
+Removes only Tideline-managed MCP and hook config.
+Stored Tideline data is left in place.
+
+Options:
+  --config-path <path>  Codex config.toml path
+  --hooks-path <path>   Codex hooks.json path
+  --json                Print machine-readable output
+  --yes                 Run noninteractively
 `);
 }

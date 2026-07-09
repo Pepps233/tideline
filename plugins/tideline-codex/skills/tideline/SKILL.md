@@ -14,4 +14,4 @@ Use `expand_context_block` when the assembled packet contains a compact block bu
 
 Tideline stores local data under `~/.tideline` by default.
 The Codex hook integration captures prompts, tool results, and response checkpoints into that storage.
-If no sessions appear, ask the user to run `tideline codex install`, restart Codex, and trust the Tideline hooks with `/hooks`.
+If no sessions appear, ask the user to run `tideline-context install codex`, restart Codex, and trust the Tideline hooks with `/hooks`.
