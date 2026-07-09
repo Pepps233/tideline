@@ -50,7 +50,7 @@ Durable memory is intentionally deferred so the initial architecture can keep so
 `@tideline/core` owns the transcript store, raw blob persistence, source item splitting, context block construction, expansion, assembly, and hook capture transactions.
 It keeps transcript roles normalized to `user` and `model`.
 
-`@tideline/hooks` provides the `tideline-hook` CLI.
+`@tideline/hooks` provides the internal hook capture adapters used by the public CLI.
 The CLI reads one JSON event from stdin, writes one JSON receipt to stdout, and stores captured turns through `@tideline/core`.
 By default, it writes to `~/.tideline/tideline.sqlite` and `~/.tideline/blobs`.
 It also ships `tideline-codex-hook`, which adapts Codex lifecycle hook payloads into Tideline capture events.
@@ -60,7 +60,8 @@ It lists turns and context blocks, expands context blocks, and assembles sliding
 By default, it reads from the same `~/.tideline` storage directory.
 
 `@tideline/cli` provides setup commands for local integrations.
-The first command is `tideline codex install`, which writes Tideline MCP and hook configuration into Codex config files.
+The main command is `tideline-context install codex`, which writes Tideline MCP and hook configuration into Codex config files.
+It also exposes `tideline-context doctor codex`, `tideline-context uninstall codex`, `tideline-context mcp`, and `tideline-context hook codex`.
 
 The repo also includes a local Codex plugin scaffold at `plugins/tideline-codex`.
 The plugin bundles the Tideline MCP server definition, Codex hook definitions, and a small usage skill.
@@ -77,24 +78,31 @@ corepack enable
 pnpm install
 ```
 
-For local use, both CLIs work without storage flags.
+For local use, the public CLI works without storage flags.
 The first run creates `~/.tideline`.
 
 ```sh
-tideline-hook --thread-id my-session < event.json
-tideline-mcp
+tideline-context hook codex --event UserPromptSubmit --print-receipt < codex-hook-event.json
+tideline-context mcp
 ```
 
-For Codex integration from a checkout, build the workspace and run the installer.
+For Codex integration, install through the public CLI.
 The installer is idempotent and preserves non-Tideline Codex config.
 
 ```sh
-pnpm build
-node packages/cli/dist/cli.js codex install
+npx -y tideline-context install codex
 ```
 
 Restart Codex after installation.
 Then run `/hooks` and trust the Tideline hook definitions before expecting automatic capture.
+Run `tideline-context doctor codex` if capture does not appear.
+
+For Codex integration from a checkout, build the workspace and run the same command through the local CLI.
+
+```sh
+pnpm build
+node packages/cli/dist/cli.js install codex --repo-root "$PWD"
+```
 
 ## License
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 
 import {
   createTranscriptStore,
@@ -86,22 +87,26 @@ const TOOL_OUTPUT_KEYS = new Set([
   "stdout",
 ]);
 
-void run();
+if (isDirectEntrypoint(import.meta.url)) {
+  void runCodexHookAdapterCli();
+}
 
-async function run(): Promise<void> {
+export async function runCodexHookAdapterCli(
+  args: string[] = process.argv.slice(2),
+): Promise<void> {
   let strict = false;
 
   try {
-    const args = parseArgs(process.argv.slice(2));
-    strict = args.strict;
+    const parsedArgs = parseArgs(args);
+    strict = parsedArgs.strict;
 
-    if (args.eventName === "help") {
+    if (parsedArgs.eventName === "help") {
       printHelp();
       return;
     }
 
     await handleCodexHook({
-      args,
+      args: parsedArgs,
       env: process.env,
       rawInput: await readStdin(),
     });
@@ -109,8 +114,17 @@ async function run(): Promise<void> {
     process.stderr.write(
       `[tideline-codex-hook] ${error instanceof Error ? error.message : String(error)}\n`,
     );
-    process.exitCode = strict ? 1 : 0;
+
+    if (strict) {
+      process.exitCode = 1;
+    }
   }
+}
+
+function isDirectEntrypoint(metaUrl: string): boolean {
+  const entrypoint = process.argv[1];
+
+  return entrypoint ? pathToFileURL(entrypoint).href === metaUrl : false;
 }
 
 async function handleCodexHook(input: CodexHookHandlerInput): Promise<void> {

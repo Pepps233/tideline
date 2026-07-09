@@ -29,6 +29,19 @@ importers:
         version: 5.9.3
 
   packages/cli:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
+      '@tideline/core':
+        specifier: workspace:*
+        version: link:../core
+      '@tideline/hooks':
+        specifier: workspace:*
+        version: link:../hooks
+      '@tideline/mcp':
+        specifier: workspace:*
+        version: link:../mcp
     devDependencies:
       '@types/node':
         specifier: ^22.20.0
