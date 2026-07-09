@@ -25,8 +25,10 @@ tideline-hook --sqlite-path ./tideline.sqlite --blob-dir ./tideline-blobs < even
 `tideline-codex-hook` adapts Codex lifecycle hook payloads into the same core capture model.
 It is designed for Codex `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks.
 The adapter exits successfully when a hook payload cannot be captured, so Tideline capture does not block normal Codex work.
+It keeps stdout empty by default because Codex validates hook stdout as hook control output.
 Use `--strict` when testing adapter payloads and you want failures to exit non-zero.
+Use `--print-receipt` only for manual testing outside Codex.
 
 ```sh
-tideline-codex-hook --event UserPromptSubmit < codex-hook-event.json
+tideline-codex-hook --event UserPromptSubmit --print-receipt < codex-hook-event.json
 ```
