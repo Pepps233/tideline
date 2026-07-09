@@ -19,3 +19,14 @@ Use explicit paths only when you need custom storage.
 ```sh
 tideline-hook --sqlite-path ./tideline.sqlite --blob-dir ./tideline-blobs < event.json
 ```
+
+## Codex Adapter
+
+`tideline-codex-hook` adapts Codex lifecycle hook payloads into the same core capture model.
+It is designed for Codex `SessionStart`, `UserPromptSubmit`, `PostToolUse`, and `Stop` hooks.
+The adapter exits successfully when a hook payload cannot be captured, so Tideline capture does not block normal Codex work.
+Use `--strict` when testing adapter payloads and you want failures to exit non-zero.
+
+```sh
+tideline-codex-hook --event UserPromptSubmit < codex-hook-event.json
+```

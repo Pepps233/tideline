@@ -1,0 +1,54 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tideline-codex-hook --event SessionStart",
+            "statusMessage": "Capturing Tideline session",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tideline-codex-hook --event UserPromptSubmit",
+            "statusMessage": "Capturing Tideline prompt",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tideline-codex-hook --event PostToolUse",
+            "statusMessage": "Capturing Tideline tool output",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "tideline-codex-hook --event Stop",
+            "statusMessage": "Capturing Tideline response",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}
