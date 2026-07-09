@@ -7,6 +7,7 @@ import {
 } from "@tideline/core";
 
 import { createTidelineMcpServer } from "./index.js";
+import type { CurrentThreadEnvHints } from "./index.js";
 
 interface StorageConfig {
   sqlitePath: string;
@@ -29,7 +30,11 @@ export async function runTidelineMcpCli(
     sqlitePath: config.sqlitePath,
     blobDir: config.blobDir,
   });
-  const server = createTidelineMcpServer({ store });
+  const server = createTidelineMcpServer({
+    store,
+    currentThreadEnv: currentThreadEnvFromEnv(env),
+    storageConfig: config,
+  });
   const transport = new StdioServerTransport();
 
   installShutdownHandlers(store);
@@ -53,6 +58,29 @@ function parseStorageConfig(
     env,
     sqlitePath: parsed.sqlitePath,
   });
+}
+
+function currentThreadEnvFromEnv(
+  env: NodeJS.ProcessEnv,
+): CurrentThreadEnvHints {
+  const hints: CurrentThreadEnvHints = {};
+
+  assignEnvHint(hints, "TIDELINE_THREAD_ID", env.TIDELINE_THREAD_ID);
+  assignEnvHint(hints, "CODEX_THREAD_ID", env.CODEX_THREAD_ID);
+  assignEnvHint(hints, "CODEX_SESSION_ID", env.CODEX_SESSION_ID);
+  assignEnvHint(hints, "CODEX_CONVERSATION_ID", env.CODEX_CONVERSATION_ID);
+
+  return hints;
+}
+
+function assignEnvHint(
+  hints: CurrentThreadEnvHints,
+  key: keyof CurrentThreadEnvHints,
+  value: string | undefined,
+): void {
+  if (typeof value === "string" && value.trim().length > 0) {
+    hints[key] = value;
+  }
 }
 
 function parseArgs(args: string[]): Partial<StorageConfig> {

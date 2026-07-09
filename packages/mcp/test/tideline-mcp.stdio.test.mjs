@@ -35,8 +35,8 @@ test("serves tools over stdio with text and structured content", async (t) => {
   const tools = await client.listTools();
 
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
-    "assemble_current_context",
     "assemble_context",
+    "assemble_current_context",
     "expand_context_block",
     "get_assembly_receipt",
     "get_context_block",

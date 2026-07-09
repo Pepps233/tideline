@@ -4,14 +4,18 @@ import type {
   BuildContextBlocksInput as CoreBuildContextBlocksInput,
   CaptureTurnEventInput,
   CaptureTurnEventReceipt,
+  GetSessionStatusInput,
   EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
+  ListRecentMessagesInput,
   ListSessionsInput,
   SearchContextInput,
   SearchContextResult,
+  SessionStatus,
   StoredAssemblyReceipt,
   StoredContextBlock as CoreStoredContextBlock,
+  StoredMessagePreview,
   StoredRelationship,
   StoredSessionSummary,
   TranscriptStore as CoreTranscriptStore,
@@ -31,21 +35,30 @@ export type {
   CaptureTurnEventReceipt,
   ContextAction,
   CreateTranscriptStoreOptions,
+  CurrentSessionPayload,
+  CurrentSessionSelectionSource,
   EmbeddingProvider,
   ExpandContextBlockInput,
   ExpandedContextBlock,
   ExpandedContextBlockSource,
+  GetSessionStatusInput,
+  ListRecentMessagesInput,
   RawBlobPointer,
   RelationshipEntityType,
   RelationshipType,
   ListSessionsInput,
   SearchContextInput,
   SearchContextResult,
+  SessionCaptureState,
+  SessionStatus,
+  SessionStatusStorage,
   SourceLabel,
   StoredAssemblyReceipt,
+  StoredMessagePreview,
   StoredRelationship,
   StoredSessionSummary,
   StoredSourceItem,
+  StoredTurnMetadata,
   StoredTranscriptTurn,
   TranscriptRole,
 } from "./types.js";
@@ -75,11 +88,15 @@ export interface TranscriptStore extends CoreTranscriptStore {
   getAssemblyReceipt(
     assemblyId: string,
   ): Promise<StoredAssemblyReceipt | undefined>;
+  getSessionStatus(input: GetSessionStatusInput): Promise<SessionStatus>;
   listThreadAssemblyReceipts(
     threadId: string,
   ): Promise<StoredAssemblyReceipt[]>;
   listThreadContextBlocks(threadId: string): Promise<StoredContextBlock[]>;
   listThreadRelationships(threadId: string): Promise<StoredRelationship[]>;
+  listRecentMessages(
+    input: ListRecentMessagesInput,
+  ): Promise<StoredMessagePreview[]>;
   listSessions(input?: ListSessionsInput): Promise<StoredSessionSummary[]>;
   refreshThreadSearchIndex(threadId: string): Promise<void>;
   searchContext(input: SearchContextInput): Promise<SearchContextResult>;

@@ -158,6 +158,24 @@ export interface ListSessionsInput {
   limit?: number;
 }
 
+export interface ListRecentMessagesInput {
+  threadId: string;
+  limit?: number;
+  maxTextLength?: number;
+}
+
+export interface GetSessionStatusInput {
+  threadId: string;
+}
+
+export interface StoredMessagePreview {
+  text: string;
+  role: TranscriptRole;
+  turnIndex: number;
+  createdAt: string;
+  truncated: boolean;
+}
+
 export interface StoredSessionSummary {
   threadId: string;
   turnCount: number;
@@ -169,6 +187,56 @@ export interface StoredSessionSummary {
   pendingToolEventCount: number;
   firstActivityAt: string;
   latestActivityAt: string;
+  firstUserMessagePreview: StoredMessagePreview | null;
+  latestUserMessagePreview: StoredMessagePreview | null;
+}
+
+export interface StoredTurnMetadata {
+  turnId: string;
+  threadId: string;
+  turnIndex: number;
+  turnRole: TranscriptRole;
+  sourceItemIds: string[];
+  derivedContextBlockIds: string[];
+  createdAt: string;
+}
+
+export type CurrentSessionSelectionSource =
+  | "TIDELINE_THREAD_ID"
+  | "CODEX_THREAD_ID"
+  | "CODEX_SESSION_ID"
+  | "CODEX_CONVERSATION_ID"
+  | "latest_active_session";
+
+export interface CurrentSessionPayload {
+  session: StoredSessionSummary;
+  selectionSource: CurrentSessionSelectionSource;
+  nextActiveTurn: number;
+  latestTurn: StoredTurnMetadata | null;
+  latestUserMessagePreview: StoredMessagePreview | null;
+}
+
+export interface SessionStatusStorage {
+  sqlitePath: string;
+  blobDir: string;
+}
+
+export interface SessionCaptureState {
+  pendingToolEvents: number;
+  hookTrustVerification: "not_checked";
+  hookInstallVerification: "not_checked";
+  doctorCommand: "tideline-context doctor codex";
+}
+
+export interface SessionStatus {
+  threadId: string;
+  storage: SessionStatusStorage;
+  latestActivityAt: string | null;
+  turnCount: number;
+  processedEventCount: number;
+  pendingToolEventCount: number;
+  latestStoredMessagePreview: StoredMessagePreview | null;
+  captureState: SessionCaptureState;
 }
 
 export type SearchContextEntityType = RelationshipEntityType;
@@ -300,6 +368,10 @@ export interface TranscriptStore {
     assemblyId: string,
   ): Promise<StoredAssemblyReceipt | undefined>;
   getTurn(turnId: string): Promise<StoredTranscriptTurn | undefined>;
+  getSessionStatus(input: GetSessionStatusInput): Promise<SessionStatus>;
+  listRecentMessages(
+    input: ListRecentMessagesInput,
+  ): Promise<StoredMessagePreview[]>;
   listThreadAssemblyReceipts(
     threadId: string,
   ): Promise<StoredAssemblyReceipt[]>;
