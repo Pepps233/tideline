@@ -70,7 +70,7 @@ test("captures Codex prompts, tools, and stop events into one thread", async (t)
     });
 
     assert.equal(result.exit.code, 0, result.stderr);
-    assert.equal(result.stdout.trim().split("\n").length, 1);
+    assert.equal(result.stdout, "");
   }
 
   const store = await createTranscriptStore({
@@ -118,6 +118,32 @@ test("skips Codex events without a resolvable session id", async (t) => {
   assert.equal(result.exit.code, 0);
   assert.match(result.stderr, /Skipped capture/i);
   assert.equal(result.stdout, "");
+});
+
+test("prints capture receipts only when requested", async (t) => {
+  const fixture = await createCodexFixture(t);
+  const result = await runCodexAdapter({
+    args: [
+      "--event",
+      "UserPromptSubmit",
+      "--print-receipt",
+      "--sqlite-path",
+      fixture.sqlitePath,
+      "--blob-dir",
+      fixture.blobDir,
+    ],
+    input: JSON.stringify({
+      prompt: "Task: Print this capture receipt.",
+      session_id: "codex-session-print-receipt",
+    }),
+  });
+
+  assert.equal(result.exit.code, 0, result.stderr);
+
+  const receipt = JSON.parse(result.stdout);
+
+  assert.equal(receipt.kind, "prompt_submit");
+  assert.equal(receipt.threadId, "codex-session-print-receipt");
 });
 
 test("can fail strictly for invalid hook JSON", async (t) => {

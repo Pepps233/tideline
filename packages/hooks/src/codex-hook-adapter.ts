@@ -13,6 +13,7 @@ import type {
 interface CliArgs {
   blobDir?: string;
   eventName?: string;
+  printReceipt: boolean;
   sqlitePath?: string;
   strict: boolean;
   threadId?: string;
@@ -144,14 +145,16 @@ async function handleCodexHook(input: CodexHookHandlerInput): Promise<void> {
   try {
     const receipt = await store.captureTurnEvent(captureInput);
 
-    process.stdout.write(`${JSON.stringify(receipt)}\n`);
+    if (input.args.printReceipt) {
+      process.stdout.write(`${JSON.stringify(receipt)}\n`);
+    }
   } finally {
     await store.close();
   }
 }
 
 function parseArgs(args: string[]): CliArgs {
-  const parsed: CliArgs = { strict: false };
+  const parsed: CliArgs = { printReceipt: false, strict: false };
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -163,6 +166,11 @@ function parseArgs(args: string[]): CliArgs {
 
     if (arg === "--strict") {
       parsed.strict = true;
+      continue;
+    }
+
+    if (arg === "--print-receipt") {
+      parsed.printReceipt = true;
       continue;
     }
 
@@ -682,6 +690,7 @@ Options:
   --thread-id <id>     Override the Tideline thread id
   --sqlite-path <path> Override SQLite storage path
   --blob-dir <path>    Override raw blob storage directory
+  --print-receipt      Print the Tideline capture receipt for manual testing
   --strict             Exit non-zero when capture fails
 `);
 }
